@@ -1,0 +1,17 @@
+import { NextResponse } from 'next/server';
+import { formatDistance, stores } from '@/lib/data';
+
+const distanceKm = (aLat: number, aLon: number, bLat: number, bLon: number) => {
+  const radians = (n: number) => n * Math.PI / 180;
+  const dLat = radians(bLat - aLat); const dLon = radians(bLon - aLon);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(aLat)) * Math.cos(radians(bLat)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+export async function GET(request: Request) {
+  const url = new URL(request.url); const lat = Number(url.searchParams.get('lat')); const lon = Number(url.searchParams.get('lon'));
+  const radius = Number(url.searchParams.get('radius') ?? 10);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || !Number.isFinite(radius) || radius <= 0 || radius > 100) return NextResponse.json({ error: 'מיקום או רדיוס לא תקינים' }, { status: 400 });
+  const nearby = stores.map((store) => ({ ...store, distanceKm: distanceKm(lat, lon, store.coordinates.lat, store.coordinates.lon) })).filter((store) => store.distanceKm <= radius).sort((a, b) => a.distanceKm - b.distanceKm).map((store) => ({ ...store, distance: formatDistance(store.distanceKm) }));
+  return NextResponse.json({ stores: nearby, radiusKm: radius });
+}

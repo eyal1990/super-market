@@ -48,7 +48,22 @@ Run the web app's linter from the repository root:
 npm run lint
 ```
 
-There is currently no test suite or test dependency in `web/`, so this repository does not expose a misleading `test` script yet. Add one when a meaningful dependency-free or project-backed test command exists.
+Run the checks from the repository root:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+The tests use Node's built-in test runner and cover Hebrew/barcode search, public multi-buy rules, club-only pricing, and unavailable products. CI runs the same commands on every push and pull request.
+
+## Data and operations
+
+The app runs with fixture data and does not require retailer credentials. The portable PostgreSQL schema is in [`db/migrations/001_init.sql`](./db/migrations/001_init.sql); start local PostgreSQL with `docker compose up -d postgres` and apply the migration with your preferred PostgreSQL client. The adapter contract and safe ingestion runner live under [`web/lib/ingestion/`](./web/lib/ingestion/), with operational notes in [`docs/ingestion-runbook.md`](./docs/ingestion-runbook.md).
+
+Source and UX decisions are recorded in [`docs/source-matrix.md`](./docs/source-matrix.md), [`docs/ux-flows.md`](./docs/ux-flows.md), and [`docs/security-review.md`](./docs/security-review.md). Exact addresses are not persisted; live geocoding must be added behind a cached, rate-limited server proxy before production use.
 
 ## Product context
 

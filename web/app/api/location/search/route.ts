@@ -1,0 +1,8 @@
+import { NextResponse } from 'next/server';
+import { findAddressResults } from '@/lib/data';
+
+export async function GET(request: Request) {
+  const query = new URL(request.url).searchParams.get('q') ?? '';
+  if (query.length > 120) return NextResponse.json({ error: 'כתובת ארוכה מדי' }, { status: 400 });
+  return NextResponse.json({ results: findAddressResults(query), privacy: 'הכתובת משמשת לחיפוש הנוכחי בלבד ואינה נשמרת.' });
+}
