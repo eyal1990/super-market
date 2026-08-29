@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { rateLimit } from '@/lib/api';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const limited = rateLimit(request, 'ingestion-status'); if (limited) return limited;
   return NextResponse.json({
     generatedAt: '2026-08-30T08:20:00+03:00',
     retailers: [

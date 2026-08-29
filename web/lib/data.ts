@@ -97,6 +97,7 @@ export const products: Product[] = [
 
 export const money = (value: number) => `${value.toFixed(2)} ₪`;
 export const formatDistance = (km: number) => km < 1 ? `${Math.round(km * 1000)} מ׳` : `${km.toFixed(1)} ק״מ`;
+const round = (value: number) => Number(value.toFixed(2));
 
 export function normalizeSearch(value: string) {
   return value.toLocaleLowerCase('he-IL').replace(/[״”“'`.,/\\-]/g, '').replace(/\s+/g, ' ').trim();
@@ -112,13 +113,18 @@ export function getPrice(product: Product, storeId: string) {
   return product.prices[storeId] ?? { amount: null, unitPrice: 'לא זמין', updatedAt: '', available: false, source: '' };
 }
 
+export function isPromotionActive(promotion: Promotion, now = new Date()) {
+  const end = new Date(`${promotion.validUntil}T23:59:59+03:00`);
+  return !Number.isNaN(end.getTime()) && now <= end;
+}
+
 export function calculateLine(product: Product, storeId: string, quantity: number) {
   const price = getPrice(product, storeId);
   const safeQuantity = Math.max(0, Math.floor(quantity));
   if (!price.available || price.amount === null) return { baseTotal: null, publicTotal: null, clubTotal: null, clubSavings: 0, status: 'unavailable' as const, promotionNote: 'המוצר לא זמין בסניף זה' };
   const baseTotal = price.amount * safeQuantity;
-  const publicPromotion = product.promotions.find((p) => p.kind === 'public' && p.minimumQuantity && p.offerPrice !== undefined);
-  const clubPromotion = product.promotions.find((p) => p.kind === 'club' && p.clubPrice !== undefined);
+  const publicPromotion = product.promotions.find((p) => isPromotionActive(p) && p.kind === 'public' && p.minimumQuantity && p.offerPrice !== undefined);
+  const clubPromotion = product.promotions.find((p) => isPromotionActive(p) && p.kind === 'club' && p.clubPrice !== undefined);
   const publicTotal = publicPromotion && safeQuantity >= (publicPromotion.minimumQuantity ?? Infinity)
     ? Math.floor(safeQuantity / (publicPromotion.minimumQuantity ?? 1)) * (publicPromotion.offerPrice ?? price.amount) + (safeQuantity % (publicPromotion.minimumQuantity ?? 1)) * price.amount
     : baseTotal;
@@ -139,9 +145,9 @@ export function calculateBasket(items: Record<string, number>, storeId: string) 
   const unavailable = lines.filter((line) => line.calculation.publicTotal === null);
   return {
     lines, unavailable,
-    publicTotal: available.reduce((sum, line) => sum + (line.calculation.publicTotal ?? 0), 0),
-    clubTotal: available.reduce((sum, line) => sum + (line.calculation.clubTotal ?? 0), 0),
-    clubSavings: available.reduce((sum, line) => sum + line.calculation.clubSavings, 0),
+    publicTotal: round(available.reduce((sum, line) => sum + (line.calculation.publicTotal ?? 0), 0)),
+    clubTotal: round(available.reduce((sum, line) => sum + (line.calculation.clubTotal ?? 0), 0)),
+    clubSavings: round(available.reduce((sum, line) => sum + line.calculation.clubSavings, 0)),
   };
 }
 

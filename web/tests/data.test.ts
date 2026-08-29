@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateBasket, calculateLine, products, searchProducts, stores } from '../lib/data.ts';
+import { calculateBasket, calculateLine, isPromotionActive, products, searchProducts, stores } from '../lib/data.ts';
 
 test('Hebrew and barcode search returns the canonical product', () => {
   assert.equal(searchProducts('קורנפלקס')[0]?.id, 'cereal');
@@ -28,6 +28,13 @@ test('club-only unit price does not leak into public totals', () => {
   assert.equal(line.publicTotal, 24.9);
   assert.equal(line.clubTotal, 19.9);
   assert.equal(line.clubSavings, 5);
+});
+
+test('expired promotions are excluded from calculations', () => {
+  const cereal = products.find((product) => product.id === 'cereal')!;
+  const expired = { ...cereal, promotions: cereal.promotions.map((promotion) => ({ ...promotion, validUntil: '2020-01-01' })) };
+  assert.equal(isPromotionActive(expired.promotions[0]!, new Date('2026-08-30T08:00:00Z')), false);
+  assert.equal(calculateLine(expired, stores[0].id, 2).publicTotal, 49.8);
 });
 
 test('unavailable products remain visible and are not priced as zero', () => {
