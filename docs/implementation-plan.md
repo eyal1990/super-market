@@ -101,6 +101,29 @@ The GitHub backlog below is the implementation sequence. Each issue must investi
 17. Security, privacy, accessibility, and legal disclosures.
 18. End-to-end verification and deployment.
 
+## GitHub task links
+
+The implementation backlog is tracked in the repository issues:
+
+1. [Task 01 — Project foundation and portable development environment](https://github.com/eyal1990/super-market/issues/1)
+2. [Task 02 — Product requirements and UX flows](https://github.com/eyal1990/super-market/issues/2)
+3. [Task 03 — Retailer source inventory and adapter feasibility](https://github.com/eyal1990/super-market/issues/3)
+4. [Task 04 — Normalized data model and database schema](https://github.com/eyal1990/super-market/issues/4)
+5. [Task 05 — Generic retailer ingestion framework](https://github.com/eyal1990/super-market/issues/5)
+6. [Task 06 — Cerberus FTP ingestion](https://github.com/eyal1990/super-market/issues/6)
+7. [Task 07 — Shufersal ingestion](https://github.com/eyal1990/super-market/issues/7)
+8. [Task 08 — Additional retailer adapters](https://github.com/eyal1990/super-market/issues/8)
+9. [Task 09 — Data normalization and product identity](https://github.com/eyal1990/super-market/issues/9)
+10. [Task 10 — Data-quality and freshness system](https://github.com/eyal1990/super-market/issues/10)
+11. [Task 11 — Address search and nearby-store selection](https://github.com/eyal1990/super-market/issues/11)
+12. [Task 12 — Product search and price comparison API](https://github.com/eyal1990/super-market/issues/12)
+13. [Task 13 — Comparison and store-selection interface](https://github.com/eyal1990/super-market/issues/14)
+14. [Task 14 — Shopping basket](https://github.com/eyal1990/super-market/issues/13)
+15. [Task 15 — Promotion and club-discount calculation](https://github.com/eyal1990/super-market/issues/15)
+16. [Task 16 — Scheduled ingestion and observability](https://github.com/eyal1990/super-market/issues/16)
+17. [Task 17 — Security, privacy, accessibility, and legal disclosures](https://github.com/eyal1990/super-market/issues/17)
+18. [Task 18 — End-to-end verification and deployment](https://github.com/eyal1990/super-market/issues/18)
+
 ## Acceptance baseline
 
 The first usable release is complete only when a test or demo can:
@@ -126,4 +149,3 @@ The first usable release is complete only when a test or demo can:
 ## Related research
 
 See [`price-data-investigation.md`](./price-data-investigation.md) for source findings, risks, references, and required external validation.
-
