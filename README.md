@@ -65,6 +65,8 @@ The app runs with fixture data and does not require retailer credentials. The po
 
 Source and UX decisions are recorded in [`docs/source-matrix.md`](./docs/source-matrix.md), [`docs/ux-flows.md`](./docs/ux-flows.md), and [`docs/security-review.md`](./docs/security-review.md). Exact addresses are not persisted; live geocoding must be added behind a cached, rate-limited server proxy before production use.
 
+Deployment, backup, rollback, and scheduled ingestion expectations are in [`docs/deployment.md`](./docs/deployment.md) and [`ops/ingestion-schedules.json`](./ops/ingestion-schedules.json).
+
 ## Product context
 
 The first usable release should support nearby-store selection, Hebrew product search, branch-level price and freshness display, basket totals, clear public-versus-club promotion labeling, and comparison against at least one nearby alternate store. Keep the data layer portable and fixture-friendly; a commercial aggregator or provider-specific backend must not be required.

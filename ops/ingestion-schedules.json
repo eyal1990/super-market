@@ -1,0 +1,12 @@
+{
+  "timezone": "Asia/Jerusalem",
+  "concurrency": 1,
+  "full": { "cron": "30 2 * * *", "documentKinds": ["stores", "price_full", "promo_full"] },
+  "incremental": { "cron": "0 */2 * * *", "documentKinds": ["price_incremental", "promo_incremental"] },
+  "policy": {
+    "maxRuntimeMinutes": 20,
+    "retryAttempts": 3,
+    "alertOn": ["failed_run", "partial_run", "stale_source", "row_count_anomaly", "parser_regression"],
+    "retainRunMetadataDays": 90
+  }
+}

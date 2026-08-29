@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { calculateBasket, calculateLine, formatDistance, getPrice, money, products, searchProducts, stores, type Product } from '@/lib/data';
+import { calculateBasket, calculateLine, findAddressResults, formatDistance, getPrice, money, products, searchProducts, stores, type Product } from '@/lib/data';
 
 type Basket = Record<string, number>;
 const initialBasket: Basket = { milk: 1, cereal: 2, tomatoes: 1 };
@@ -44,7 +44,7 @@ export default function Home() {
     navigator.geolocation.getCurrentPosition(() => { setLocationLabel('המיקום שלך'); setLocationOpen(false); setLiveMessage('המיקום זוהה בהצלחה'); }, () => setLocationError('לא הצלחנו לקבל הרשאת מיקום. אפשר לחפש כתובת באופן ידני.'), { timeout: 6000 });
   }
   function chooseAddress(label: string) { setLocationLabel(label); setLocationOpen(false); setLocationQuery(''); setLiveMessage(`נבחרה כתובת: ${label}`); }
-  const addressResults = locationQuery.trim() ? [{ label: 'אבן גבירול 124, תל אביב-יפו', detail: 'תל אביב-יפו' }, { label: 'דרך מנחם בגין 132, תל אביב-יפו', detail: 'תל אביב-יפו' }].filter((result) => `${result.label} ${result.detail}`.includes(locationQuery.trim())) : [];
+  const addressResults = findAddressResults(locationQuery);
 
   return <main className="app-shell" dir="rtl">
     <a className="skip-link" href="#product-search">דלגו לתוכן הראשי</a>
