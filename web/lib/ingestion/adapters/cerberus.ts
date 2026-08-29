@@ -1,4 +1,4 @@
-import { downloadSourceFile, fetchWithRetry, IngestionError } from '../core';
+import { downloadSourceFile, fetchWithRetry, IngestionError } from '../core.ts';
 import type {
   AdapterDiscoveryMetadata,
   DiscoveryInput,
@@ -10,8 +10,8 @@ import type {
   ParseContext,
   RetailerSourceAdapter,
   SourceFile,
-} from '../types';
-import { decodeXmlBytes, elementText, findXmlNodes, parseXmlDocument, xmlAttribute, xmlDate, xmlDescendantText, xmlNumber, xmlText, type XmlNode } from '../xml';
+} from '../types.ts';
+import { decodeXmlBytes, elementText, findXmlNodes, parseXmlDocument, xmlAttribute, xmlDate, xmlDescendantText, xmlNumber, xmlText, type XmlNode } from '../xml.ts';
 
 export const cerberusDiscoveryMetadata: AdapterDiscoveryMetadata = {
   adapterId: 'cerberus',

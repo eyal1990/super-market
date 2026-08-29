@@ -11,17 +11,22 @@ import {
   type RetailerSourceAdapter,
   type RetryPolicy,
   type SourceFile,
-} from './types';
-import type { DiscoveryInput } from './types';
+} from './types.ts';
+import type { DiscoveryInput } from './types.ts';
 
 export class IngestionError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
   constructor(
     message: string,
-    readonly code: string,
-    readonly retryable = false,
+    code: string,
+    retryable = false,
   ) {
     super(message);
     this.name = 'IngestionError';
+    this.code = code;
+    this.retryable = retryable;
   }
 }
 

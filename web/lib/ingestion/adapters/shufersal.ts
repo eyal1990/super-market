@@ -1,4 +1,4 @@
-import { downloadSourceFile, fetchWithRetry, IngestionError } from '../core';
+import { downloadSourceFile, fetchWithRetry, IngestionError } from '../core.ts';
 import type {
   AdapterDiscoveryMetadata,
   DiscoveryInput,
@@ -6,8 +6,8 @@ import type {
   DocumentKind,
   RetailerSourceAdapter,
   SourceFile,
-} from '../types';
-import { parseCerberusPrices, parseCerberusPromotions, parseCerberusStores } from './cerberus';
+} from '../types.ts';
+import { parseCerberusPrices, parseCerberusPromotions, parseCerberusStores } from './cerberus.ts';
 
 export const shufersalDiscoveryMetadata: AdapterDiscoveryMetadata = {
   adapterId: 'shufersal',
@@ -44,7 +44,8 @@ function classify(fileUri: string): SourceFile | undefined {
   else if (/PRICEFULL/.test(upper)) documentKind = 'price_full';
   else if (/PRICE/.test(upper)) documentKind = 'price_incremental';
   if (!documentKind) return undefined;
-  const storeId = /(?:STORE|BRANCH)[_-]?(\d{3,})/i.exec(fileName)?.[1];
+  const storeId = /(?:STORE|BRANCH)[_-]?(\d{3,})/i.exec(fileName)?.[1]
+    ?? /-\d{3}-(\d{3})-20\d{6}/i.exec(fileName)?.[1];
   return {
     id: `shufersal:${documentKind}:${fileName}:${url.pathname}`,
     retailerId: 'shufersal',
