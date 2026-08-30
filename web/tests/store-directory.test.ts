@@ -90,10 +90,10 @@ test('directory imports validate Israel coordinates, deduplicate, and keep the l
 
 test('directory imports use source timestamps when duplicate rows arrive out of order', async () => {
   const result = await importStoreDirectory((async function* () {
-    yield record({ name: '×¡× ×™×£ ×—×“×©', source: { ...source, publishedAt: '2026-08-30T10:00:00Z' } });
-    yield record({ name: '×¡× ×™×£ ×™×©×Ÿ', source: { ...source, publishedAt: '2026-08-29T10:00:00Z' } });
+    yield record({ name: 'סניף חדש', source: { ...source, publishedAt: '2026-08-30T10:00:00Z' } });
+    yield record({ name: 'סניף ישן', source: { ...source, publishedAt: '2026-08-29T10:00:00Z' } });
   })());
-  assert.equal(result.records[0]?.name, '×¡× ×™×£ ×—×“×©');
+  assert.equal(result.records[0]?.name, 'סניף חדש');
 });
 
 test('directory merge retains priced branches and does not invent price observations', () => {
@@ -106,15 +106,15 @@ test('directory merge retains priced branches and does not invent price observat
 test('directory metadata remains authoritative when it overlaps a priced branch', () => {
   const merged = storesFromDirectory(stores, [{
     ...nationwideStoreDirectory[0]!,
-    address: '×›×ª×•×‘×ª ×ž×¢×•×“×›× ×ª',
-    city: '×ª×œ ××‘×™×‘-×™×¤×•',
+    address: 'כתובת מעודכנת',
+    city: 'תל אביב-יפו',
     coordinates: { lat: 32.1, lon: 34.8 },
     deliveryCapability: 'deep_link',
     retailerUrl: 'https://example.invalid/store',
     openNow: null,
   }]);
   const branch = merged[0]!;
-  assert.equal(branch.address, '×›×ª×•×‘×ª ×ž×¢×•×“×›× ×ª, ×ª×œ ××‘×™×‘-×™×¤×•');
+  assert.equal(branch.address, 'כתובת מעודכנת, תל אביב-יפו');
   assert.deepEqual(branch.coordinates, { lat: 32.1, lon: 34.8 });
   assert.equal(branch.delivery.capability, 'deep_link');
   assert.equal(branch.delivery.retailerUrl, 'https://example.invalid/store');

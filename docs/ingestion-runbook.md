@@ -95,4 +95,14 @@ Use `diagnoseShufersalCoverage()` after discovery: `file-set-ready-records-unver
 - Alert on repeated partial/failed runs, stale source timestamps, large row-count changes, and checksum churn without expected publication.
 - The physical checkout price is authoritative. UI/API consumers should expose source freshness and keep club-only promotions separate from the public total.
 
+### Observability status contract
+
+`GET /api/ingestion/status` currently has no persistent run store to query. It
+therefore returns `mode: "demo"`, `overallStatus: "unavailable"`, and
+`telemetry.live: false`. Retailer run timestamps and counters are `null` rather
+than sample values. `generatedAt` is only the time at which the HTTP response
+was created; it is not evidence that ingestion ran or that catalog data is
+fresh. Consumers must not display a healthy/live state until the endpoint is
+wired to persisted `ingestion_runs` and `ingestion_documents` records.
+
 Never replace a current dataset from a file that merely downloaded successfully. Commit normalized records atomically per document, retain the run/document failure metadata, and investigate warnings before widening a source's schedule.
