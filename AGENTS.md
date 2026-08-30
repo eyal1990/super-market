@@ -11,3 +11,7 @@ This is a Hebrew-first, RTL Israeli supermarket price-comparison site. The first
 ## Local development
 
 Keep the repository runnable from a fresh checkout. Prefer explicit package scripts for install, development, build, lint, and test. A future agent should be able to start the site locally and inspect it in a browser without guessing the command.
+
+## Completion and delivery
+
+When an implementation task is complete, run the relevant verification commands, commit all in-scope changes with a descriptive commit message, and push the current branch to its configured `origin` remote. Do not leave completed work uncommitted or unpushed. Never include secrets or unrelated user changes; if an in-scope change overlaps unrelated work or push is blocked, report the exact blocker instead of silently dropping or overwriting changes.

@@ -151,13 +151,224 @@ export function calculateBasket(items: Record<string, number>, storeId: string) 
   };
 }
 
-export function findAddressResults(query: string) {
+export const ADDRESS_QUERY_MIN_LENGTH = 2;
+export const ADDRESS_QUERY_MAX_LENGTH = 120;
+
+export type GeocodingMode = 'fixture' | 'provider';
+export type GeocodingGranularity = 'address' | 'street' | 'city' | 'unknown';
+
+/**
+ * The normalized contract shared by fixture and live providers. Coordinates
+ * are deliberately included so a later nearby-store resolver does not need to
+ * parse a display label or depend on a provider-specific response shape.
+ */
+export type AddressResult = {
+  id: string;
+  label: string;
+  detail: string;
+  lat: number;
+  lon: number;
+  coordinates: { lat: number; lon: number };
+  countryCode: 'IL';
+  confidence: number | null;
+  granularity: GeocodingGranularity;
+  isExactAddress: boolean;
+  source: GeocodingMode;
+  provider: string;
+};
+
+export type AddressGeocodingProvider = {
+  id: string;
+  search: (query: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
+};
+
+export type AddressGeocoder = {
+  mode: GeocodingMode;
+  provider: string;
+  search: (query: string, options?: { signal?: AbortSignal }) => Promise<AddressResult[]>;
+};
+
+export type AddressGeocoderConfig = {
+  endpoint?: string;
+  providerName?: string;
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  provider?: AddressGeocodingProvider;
+};
+
+export type AddressQueryValidation =
+  | { valid: true; query: string }
+  | { valid: false; code: 'required' | 'too_short' | 'too_long' | 'invalid_characters'; error: string };
+
+export function validateAddressQuery(value: string): AddressQueryValidation {
+  const query = value.trim();
+  const length = Array.from(query).length;
+  if (!query) return { valid: false, code: 'required', error: 'יש להזין כתובת או עיר' };
+  if (length < ADDRESS_QUERY_MIN_LENGTH) return { valid: false, code: 'too_short', error: 'הכתובת קצרה מדי' };
+  if (length > ADDRESS_QUERY_MAX_LENGTH) return { valid: false, code: 'too_long', error: 'כתובת ארוכה מדי' };
+  if (/[\u0000-\u001F\u007F]/.test(query)) return { valid: false, code: 'invalid_characters', error: 'הכתובת מכילה תווים לא תקינים' };
+  return { valid: true, query };
+}
+
+const fixtureAddressResults: AddressResult[] = [
+  { id: 'tel-aviv', label: 'תל אביב-יפו', detail: 'מחוז תל אביב', lat: 32.0853, lon: 34.7818, coordinates: { lat: 32.0853, lon: 34.7818 }, countryCode: 'IL', confidence: 0.75, granularity: 'city', isExactAddress: false, source: 'fixture', provider: 'fixture' },
+  { id: 'even-gvirol', label: 'אבן גבירול 124, תל אביב-יפו', detail: 'תל אביב-יפו', lat: 32.086, lon: 34.783, coordinates: { lat: 32.086, lon: 34.783 }, countryCode: 'IL', confidence: 0.95, granularity: 'address', isExactAddress: true, source: 'fixture', provider: 'fixture' },
+  { id: 'begin', label: 'דרך מנחם בגין 132, תל אביב-יפו', detail: 'תל אביב-יפו', lat: 32.074, lon: 34.79, coordinates: { lat: 32.074, lon: 34.79 }, countryCode: 'IL', confidence: 0.95, granularity: 'address', isExactAddress: true, source: 'fixture', provider: 'fixture' },
+];
+
+/** Development/test fallback only. It is intentionally small and is not an Israeli address database. */
+export function findAddressResults(query: string): AddressResult[] {
   const normalized = normalizeSearch(query);
   if (!normalized) return [];
-  const known = [
-    { id: 'tel-aviv', label: 'תל אביב-יפו', detail: 'מחוז תל אביב', lat: 32.0853, lon: 34.7818 },
-    { id: 'even-gvirol', label: 'אבן גבירול 124, תל אביב-יפו', detail: 'תל אביב-יפו', lat: 32.086, lon: 34.783 },
-    { id: 'begin', label: 'דרך מנחם בגין 132, תל אביב-יפו', detail: 'תל אביב-יפו', lat: 32.074, lon: 34.79 },
-  ];
-  return known.filter((result) => normalizeSearch(`${result.label} ${result.detail}`).includes(normalized));
+  return fixtureAddressResults.filter((result) => normalizeSearch(`${result.label} ${result.detail}`).includes(normalized));
+}
+
+const fixtureGeocoder: AddressGeocoder = {
+  mode: 'fixture',
+  provider: 'fixture',
+  async search(query) {
+    return findAddressResults(query);
+  },
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function coordinatesFromCandidate(candidate: Record<string, unknown>) {
+  const coordinates = candidate.coordinates;
+  if (Array.isArray(coordinates)) {
+    const lon = asNumber(coordinates[0]); const lat = asNumber(coordinates[1]);
+    if (lat !== undefined && lon !== undefined) return { lat, lon };
+  }
+  const coordinateRecord = asRecord(coordinates);
+  const lat = asNumber(coordinateRecord?.lat ?? coordinateRecord?.latitude ?? candidate.lat ?? candidate.latitude);
+  const lon = asNumber(coordinateRecord?.lon ?? coordinateRecord?.lng ?? coordinateRecord?.longitude ?? candidate.lon ?? candidate.lng ?? candidate.longitude);
+  if (lat !== undefined && lon !== undefined) return { lat, lon };
+  const geometry = asRecord(candidate.geometry);
+  const geometryCoordinates = geometry?.coordinates;
+  if (Array.isArray(geometryCoordinates)) {
+    const geometryLon = asNumber(geometryCoordinates[0]); const geometryLat = asNumber(geometryCoordinates[1]);
+    if (geometryLat !== undefined && geometryLon !== undefined) return { lat: geometryLat, lon: geometryLon };
+  }
+  return null;
+}
+
+function isIsraeliResult(candidate: Record<string, unknown>, coordinates: { lat: number; lon: number }) {
+  const address = asRecord(candidate.address);
+  const countryCode = asString(candidate.countryCode ?? candidate.country_code ?? address?.countryCode ?? address?.country_code);
+  if (countryCode) return countryCode.toLowerCase() === 'il' || countryCode.toLowerCase() === 'israel';
+  return coordinates.lat >= 29 && coordinates.lat <= 33.7 && coordinates.lon >= 34.1 && coordinates.lon <= 35.9;
+}
+
+function granularityFromCandidate(candidate: Record<string, unknown>): GeocodingGranularity {
+  const value = asString(candidate.granularity ?? candidate.type)?.toLowerCase();
+  if (value && ['address', 'house', 'building', 'residential'].includes(value)) return 'address';
+  if (value === 'street' || value === 'road') return 'street';
+  if (value && ['city', 'town', 'village', 'municipality', 'locality'].includes(value)) return 'city';
+  return 'unknown';
+}
+
+function normalizeProviderResults(payload: unknown, provider: string): AddressResult[] {
+  const payloadRecord = asRecord(payload);
+  const candidates = Array.isArray(payload) ? payload : payloadRecord && Array.isArray(payloadRecord.results) ? payloadRecord.results : [];
+  const normalized: Array<AddressResult | null> = candidates.map((value, index) => {
+    const candidate = asRecord(value);
+    if (!candidate) return null;
+    const coordinates = coordinatesFromCandidate(candidate);
+    if (!coordinates || !isIsraeliResult(candidate, coordinates)) return null;
+    const address = asRecord(candidate.address);
+    const label = asString(candidate.label ?? candidate.displayName ?? candidate.display_name ?? candidate.name);
+    const detail = asString(candidate.detail ?? candidate.city ?? address?.city ?? address?.town ?? address?.municipality ?? address?.county) ?? 'ישראל';
+    if (!label) return null;
+    const granularity = granularityFromCandidate(candidate);
+    const confidence = asNumber(candidate.confidence);
+    return {
+      id: asString(candidate.id ?? candidate.placeId ?? candidate.place_id) ?? `${provider}-${index + 1}`,
+      label,
+      detail,
+      lat: coordinates.lat,
+      lon: coordinates.lon,
+      coordinates,
+      countryCode: 'IL',
+      confidence: confidence === undefined ? null : Math.max(0, Math.min(1, confidence)),
+      granularity,
+      isExactAddress: granularity === 'address',
+      source: 'provider',
+      provider,
+    } satisfies AddressResult;
+  });
+  return normalized.filter((result): result is AddressResult => Boolean(result));
+}
+
+function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoint'>> & AddressGeocoderConfig): AddressGeocodingProvider {
+  const fetchImpl = config.fetchImpl ?? fetch;
+  const id = config.providerName?.trim() || 'configured-provider';
+  return {
+    id,
+    async search(query, options = {}) {
+      const url = new URL(config.endpoint);
+      url.searchParams.set('q', query);
+      url.searchParams.set('country', 'il');
+      url.searchParams.set('limit', '8');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      if (options.signal) {
+        if (options.signal.aborted) controller.abort();
+        else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+      try {
+        const headers = new Headers({ accept: 'application/json' });
+        if (config.apiKey) headers.set('authorization', `Bearer ${config.apiKey}`);
+        const response = await fetchImpl(url, { headers, signal: controller.signal });
+        if (!response.ok) throw new Error(`Geocoder returned ${response.status}`);
+        return response.json();
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  };
+}
+
+export function createAddressGeocoder(config: AddressGeocoderConfig = {}): AddressGeocoder {
+  const provider = config.provider ?? (config.endpoint?.trim() ? createHttpProvider(config as Required<Pick<AddressGeocoderConfig, 'endpoint'>>) : null);
+  if (!provider) return fixtureGeocoder;
+  return {
+    mode: 'provider',
+    provider: provider.id,
+    async search(query, options) {
+      return normalizeProviderResults(await provider.search(query, options), provider.id);
+    },
+  };
+}
+
+export type AddressSearchResolution = {
+  results: AddressResult[];
+  mode: GeocodingMode;
+  configuredMode: GeocodingMode;
+  provider: string;
+  providerStatus: 'fixture' | 'ok' | 'unavailable';
+  fallbackUsed: boolean;
+  limitations: string[];
+};
+
+export async function resolveAddressSearch(query: string, geocoder = createAddressGeocoder()): Promise<AddressSearchResolution> {
+  if (geocoder.mode === 'fixture') {
+    return { results: await geocoder.search(query), mode: 'fixture', configuredMode: 'fixture', provider: geocoder.provider, providerStatus: 'fixture', fallbackUsed: false, limitations: ['מצב fixture מיועד לפיתוח ולבדיקות ואינו מכסה את כל כתובות ישראל.'] };
+  }
+  try {
+    return { results: await geocoder.search(query), mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, limitations: [] };
+  } catch {
+    const fallback = findAddressResults(query);
+    return { results: fallback, mode: fallback.length ? 'fixture' : 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'unavailable', fallbackUsed: fallback.length > 0, limitations: ['ספק הגיאוקוד לא היה זמין. תוצאות fixture הן fallback מצומצם ואינן מכסות את כל כתובות ישראל.'] };
+  }
 }

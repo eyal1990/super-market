@@ -57,7 +57,34 @@ npm test
 npm run build
 ```
 
-The tests use Node's built-in test runner and cover Hebrew/barcode search, public multi-buy rules, club-only pricing, and unavailable products. CI runs the same commands on every push and pull request.
+The tests use Node's built-in test runner and cover Hebrew/barcode search, public multi-buy rules, club-only pricing, unavailable products, empty-basket calculations, explicit branch selection, address fixtures, price freshness, and product identity. Run only the production-neutral product-flow checks with:
+
+```bash
+cd web
+node --experimental-strip-types --test tests/product-flow.test.ts
+```
+
+CI runs the full lint, typecheck, test, and build sequence on every push and pull request. The current test suite has no browser harness, so first-run UI state, local-storage hydration behavior, browser geolocation permission errors, shopping-mode UI, product images, and retailer delivery handoff remain documented `todo` coverage until those seams exist in production code.
+
+On Windows PowerShell systems where the local execution policy blocks `npm.ps1`, use `npm.cmd` in the repository-root commands above (for example, `npm.cmd test`).
+
+## Active product backlog
+
+The following issues are the active product backlog for the next usable release. Read the relevant issue before implementing a change:
+
+1. [#19 — Show a real product image on every product card](https://github.com/eyal1990/super-market/issues/19)
+2. [#20 — Import the complete product catalog for every supported branch](https://github.com/eyal1990/super-market/issues/20)
+3. [#21 — Start with an empty basket](https://github.com/eyal1990/super-market/issues/21)
+4. [#22 — Support arbitrary Israeli address entry and geocoding](https://github.com/eyal1990/super-market/issues/22)
+5. [#23 — Make product discovery useful at catalog scale](https://github.com/eyal1990/super-market/issues/23)
+6. [#24 — Hand off a delivery basket to each supported retailer](https://github.com/eyal1990/super-market/issues/24)
+7. [#25 — Add a transparent comparison and data-quality experience](https://github.com/eyal1990/super-market/issues/25)
+8. [#26 — Require address or location before showing a selected store](https://github.com/eyal1990/super-market/issues/26)
+9. [#27 — Add explicit shopping mode: physical shopping or delivery](https://github.com/eyal1990/super-market/issues/27)
+10. [#28 — Build a first-time onboarding flow](https://github.com/eyal1990/super-market/issues/28)
+11. [#29 — Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
+
+These tests are intentionally production-neutral. They verify the existing data contracts and mark browser-only or not-yet-defined behavior as focused `todo` tests instead of introducing unapproved APIs. `web/tests/location.test.ts` is intentionally outside this change so location-agent work can proceed without overlap.
 
 ## Data and operations
 

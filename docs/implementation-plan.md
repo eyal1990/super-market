@@ -124,6 +124,24 @@ The implementation backlog is tracked in the repository issues:
 17. [Task 17 — Security, privacy, accessibility, and legal disclosures](https://github.com/eyal1990/super-market/issues/17)
 18. [Task 18 — End-to-end verification and deployment](https://github.com/eyal1990/super-market/issues/18)
 
+## Current product backlog
+
+The original implementation sequence above is closed, but the current product still has major gaps. The following open issues are the active backlog for the next usable release:
+
+1. [Start with an empty basket](https://github.com/eyal1990/super-market/issues/21)
+2. [Support arbitrary Israeli address entry and geocoding](https://github.com/eyal1990/super-market/issues/22)
+3. [Make product discovery useful at catalog scale](https://github.com/eyal1990/super-market/issues/23)
+4. [Hand off a delivery basket to each supported retailer](https://github.com/eyal1990/super-market/issues/24)
+5. [Add a transparent comparison and data-quality experience](https://github.com/eyal1990/super-market/issues/25)
+6. [Require address or location before showing a selected store](https://github.com/eyal1990/super-market/issues/26)
+7. [Add explicit shopping mode: physical shopping or delivery](https://github.com/eyal1990/super-market/issues/27)
+8. [Build a first-time onboarding flow](https://github.com/eyal1990/super-market/issues/28)
+9. [Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
+10. [Show a real product image on every product card](https://github.com/eyal1990/super-market/issues/19)
+11. [Import the complete product catalog for every supported branch](https://github.com/eyal1990/super-market/issues/20)
+
+Recommended execution order is #20/#22 first (data and location foundations), then #21/#26/#27/#28 (first-run experience), followed by #19/#23/#25 (product trust and discovery), #24 (delivery handoff), and #29 (full regression coverage).
+
 ## Acceptance baseline
 
 The first usable release is complete only when a test or demo can:
