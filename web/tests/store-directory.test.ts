@@ -1,13 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { directoryImportIsSafe, importStoreDirectory, IRON_BRANCHES_DATASTORE_URL, israelGridToWgs84, loadStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
+import { directoryImportIsSafe, importStoreDirectory, importStoreDirectoryFromAdapters, IRON_BRANCHES_DATASTORE_URL, israelGridToWgs84, loadStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
+import { createCerberusAdapter } from '../lib/ingestion/adapters/cerberus.ts';
+import { createShufersalAdapter } from '../lib/ingestion/adapters/shufersal.ts';
 import { stores } from '../lib/data.ts';
-import type { NormalizedStore } from '../lib/ingestion/types.ts';
+import type { DownloadedSourceFile, NormalizedStore, SourceFile } from '../lib/ingestion/types.ts';
 
 const source = { retailerId: 'fixture', adapterId: 'fixture', sourceFileId: 'stores-full', sourceUri: 'fixture://stores', fileName: 'Stores.xml', documentKind: 'stores' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'fixture' };
 
 function record(overrides: Partial<NormalizedStore> = {}): NormalizedStore {
   return { retailerId: 'fixture', storeId: '001', name: 'סניף בדיקה', address: 'אבן גבירול 1', city: 'תל אביב-יפו', latitude: 32.08, longitude: 34.78, source, ...overrides };
+}
+
+function storesDocument(file: SourceFile, xml: string): DownloadedSourceFile {
+  const body = new TextEncoder().encode(xml);
+  return { source: file, body, compression: 'none', compressedSizeBytes: body.byteLength, sizeBytes: body.byteLength, checksum: `fixture-${file.id}`, downloadedAt: '2026-08-30T08:00:00.000Z' };
+}
+
+function cerberusStoresAdapter(id: string, xml: string, options: { failDiscovery?: boolean } = {}) {
+  return createCerberusAdapter({
+    listFiles: async () => {
+      if (options.failDiscovery) throw new Error('fixture credential gate');
+      return [{ id, retailerId: 'cerberus', documentKind: 'stores', uri: `fixture://${id}`, fileName: 'Stores.xml' }];
+    },
+    download: async (file) => storesDocument(file, xml),
+  });
+}
+
+function shufersalStoresAdapter(id: string, xml: string) {
+  return createShufersalAdapter({
+    listFiles: async () => [{ id, retailerId: 'shufersal', documentKind: 'stores', uri: `fixture://${id}`, fileName: 'Stores.xml' }],
+    download: async (file) => storesDocument(file, xml),
+  });
 }
 
 test('the directory fixture spans Israel and is explicitly partial', () => {
@@ -24,6 +48,31 @@ test('Israeli TM Grid coordinates are converted to WGS84 without accepting out-o
   assert.ok(coordinates.lat > 31 && coordinates.lat < 33);
   assert.ok(coordinates.lon > 34 && coordinates.lon < 35.5);
   assert.equal(israelGridToWgs84(1, 1), null);
+});
+
+test('adapter directory import discovers and parses stores files across supported feeds', async () => {
+  const rami = cerberusStoresAdapter('rami-stores', '<ROOT><STORE><STOREID>001</STOREID><STORENAME>רמי לוי תל אביב</STORENAME><CHAINID>rami</CHAINID><CHAINNAME>רמי לוי</CHAINNAME><ADDRESS>דרך מנחם בגין 1</ADDRESS><CITY>תל אביב-יפו</CITY><LATITUDE>32.08</LATITUDE><LONGITUDE>34.78</LONGITUDE></STORE></ROOT>');
+  const victory = cerberusStoresAdapter('victory-stores', '<ROOT><STORE><STOREID>002</STOREID><STORENAME>ויקטורי חיפה</STORENAME><CHAINID>victory</CHAINID><CHAINNAME>ויקטורי</CHAINNAME><ADDRESS>ההסתדרות 2</ADDRESS><CITY>חיפה</CITY><LATITUDE>32.79</LATITUDE><LONGITUDE>34.99</LONGITUDE></STORE></ROOT>');
+  const shufersal = shufersalStoresAdapter('shufersal-stores', '<ROOT><STORE><STOREID>003</STOREID><STORENAME>שופרסל ירושלים</STORENAME><CHAINID>shufersal</CHAINID><CHAINNAME>שופרסל</CHAINNAME><ADDRESS>כנפי נשרים 3</ADDRESS><CITY>ירושלים</CITY><LATITUDE>31.78</LATITUDE><LONGITUDE>35.18</LONGITUDE></STORE></ROOT>');
+  const result = await importStoreDirectoryFromAdapters([rami, victory, shufersal], { now: new Date('2026-08-30T08:00:00Z') }, {
+    retailerIdForStore: (store) => store.chainId === 'rami' ? 'rami-levy' : store.chainId === 'victory' ? 'victory' : store.chainId === 'shufersal' ? 'shufersal' : undefined,
+  });
+  assert.equal(result.published, true);
+  assert.equal(result.feedState, 'complete');
+  assert.deepEqual(result.entries.map((entry) => entry.retailerId), ['rami-levy', 'shufersal', 'victory']);
+  assert.deepEqual(result.adapterReports.map((report) => [report.retailerId, report.storeFileCount, report.parsedRecordCount, report.status]), [['cerberus', 1, 1, 'completed'], ['cerberus', 1, 1, 'completed'], ['shufersal', 1, 1, 'completed']]);
+});
+
+test('adapter directory import fails closed when one expected feed is unavailable', async () => {
+  const available = cerberusStoresAdapter('available-stores', '<ROOT><STORE><STOREID>001</STOREID><STORENAME>סניף</STORENAME><CHAINID>rami</CHAINID><ADDRESS>אבן גבירול 1</ADDRESS><CITY>תל אביב</CITY><LATITUDE>32.08</LATITUDE><LONGITUDE>34.78</LONGITUDE></STORE></ROOT>');
+  const unavailable = cerberusStoresAdapter('unavailable-stores', '', { failDiscovery: true });
+  const prior = record({ retailerId: 'prior-chain', storeId: 'prior-1' });
+  const result = await importStoreDirectoryFromAdapters([available, unavailable], { now: new Date('2026-08-30T08:00:00Z') }, { previous: [prior] });
+  assert.equal(result.published, false);
+  assert.equal(result.feedState, 'partial');
+  assert.deepEqual(result.records.map((item) => item.storeId), ['prior-1']);
+  assert.match(result.warnings.join(' '), /credential gate/);
+  assert.equal(result.adapterReports[1]?.status, 'failed');
 });
 
 test('directory imports validate Israel coordinates, deduplicate, and keep the last record', async () => {

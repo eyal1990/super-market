@@ -31,6 +31,36 @@ are authoritative single-chain surfaces, but the investigated pages do not
 provide a common licensed feed with coordinates. None of these sources proves
 complete cross-chain national coverage.
 
+The primary nationwide discovery surface is the retailer `Stores` document
+published under Israel's price-transparency regime. The [Food and Pharmacy
+Competition Promotion Law](https://main.knesset.gov.il/Activity/Legislation/Laws/Pages/LawPrimary.aspx?lawitemid=2001381)
+and the [Consumer Protection Authority's price-transparency material](https://www.gov.il/he/departments/legalInfo/cpfta_prices_regulations)
+describe the obligation to publish the chain's store file alongside
+branch-level price and promotion files. This is a lawful discovery surface,
+but it is not a single government-owned, all-chain directory: the shared
+published-prices endpoint is credential-gated in the public web flow, and
+retailer-specific publication terms still need to be checked before
+redistribution.
+
+`importStoreDirectoryFromAdapters()` is the worker-facing bridge for this
+surface. It asks every configured retailer adapter for `stores` documents,
+downloads and parses them through the existing provider-neutral adapter
+contract, and returns per-adapter discovered/downloaded/parsed counts and
+failures. A full snapshot is published only when every configured adapter
+completed and the row validation gate passed. If one chain is unavailable,
+the candidate remains available for diagnostics but `published` is false and
+the caller keeps the previous snapshot. On a shared feed, use the optional
+`retailerIdForStore` mapping only after the feed's chain identifiers have been
+verified; the implementation does not guess a retailer from a display name.
+
+The adapter result's `feedState: "complete"` means only that the configured
+adapter run completed. It does not mean all Israeli supermarkets are covered.
+The API's `configured-complete-for-scope` status still requires an explicit
+IL scope manifest with matching chain and branch counts. The Ministry's
+54-branch [Israel Basket dataset](https://data.gov.il/he/datasets/moital/israel-sal)
+and its [54-branch program description](https://govextra.gov.il/economy/israel-sal-26/campaign/)
+remain auditable partial inputs, never a nationwide substitute.
+
 ## Configuration and safety
 
 Set `STORE_DIRECTORY_URL` server-side to one CKAN endpoint or normalized

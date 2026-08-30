@@ -10,6 +10,22 @@ Validated 2026-08-30 for implementation planning. Live source formats remain rep
 | Ministry controlled/imported food datasets | Official open datasets for [controlled consumer prices](https://data.gov.il/he/datasets/moital/price_controlled_consumer_products) and [imported-food selling points](https://data.gov.il/he/datasets/moital/import_quotas) | Reference-price validation only; never used as retailer checkout prices | They do not provide a complete branch-level supermarket catalog or current per-branch price/promotions feed. |
 | Other chains | No source is promoted without current schema and permission evidence | Fixture branch metadata only; delivery handoff is manual | Use the adapter contract and add a fixture before production activation. |
 
+The primary nationwide discovery path is the retailer `Stores` document
+published under the price-transparency regime. The official [Food and
+Pharmacy Competition Promotion Law](https://main.knesset.gov.il/Activity/Legislation/Laws/Pages/LawPrimary.aspx?lawitemid=2001381)
+and [Consumer Protection Authority material](https://www.gov.il/he/departments/legalInfo/cpfta_prices_regulations)
+describe publication of the chain store file with branch-level price data.
+This is a lawful discovery surface, not a single government-owned directory:
+the shared endpoint is credential-gated in its public web flow, and retailer
+publication terms and chain-id mappings must be verified before redistribution.
+
+`importStoreDirectoryFromAdapters()` is fixture-verified for multiple store
+feeds. It reports discovered, downloaded, parsed, and failed files per
+adapter, and refuses to publish a full snapshot when any configured adapter is
+unavailable. Its successful `feedState: "complete"` only describes the
+configured adapter run; API nationwide completeness still requires an
+explicit IL scope manifest with matching expected chains and branch counts.
+
 ## Catalog coverage contract
 
 The application currently ships a five-product fixture catalog covering three

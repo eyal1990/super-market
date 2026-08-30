@@ -1,5 +1,5 @@
 import type { Store } from './data.ts';
-import type { NormalizedStore } from './ingestion/types.ts';
+import type { DiscoveryInput, NormalizedStore, ParseContext, RetailerSourceAdapter } from './ingestion/types.ts';
 
 export type StoreDirectoryEntry = {
   retailerId: string;
@@ -30,6 +30,43 @@ export type StoreDirectoryImportResult = {
   duplicateCount: number;
   skippedCount: number;
   warnings: string[];
+};
+
+export type StoreDirectoryAdapterReport = {
+  adapterId: string;
+  retailerId: string;
+  status: 'completed' | 'partial' | 'failed';
+  discoveredFileCount: number;
+  storeFileCount: number;
+  downloadedFileCount: number;
+  parsedRecordCount: number;
+  warnings: string[];
+  failures: string[];
+};
+
+export type StoreDirectoryAdapterImportResult = {
+  /** Records observed across all adapter feeds before the publication gate. */
+  candidateRecords: NormalizedStore[];
+  /** Safe records to persist; a failed full run retains `previous` when supplied. */
+  records: NormalizedStore[];
+  candidateEntries: StoreDirectoryEntry[];
+  entries: StoreDirectoryEntry[];
+  importResult: StoreDirectoryImportResult;
+  adapterReports: StoreDirectoryAdapterReport[];
+  published: boolean;
+  feedState: 'complete' | 'partial' | 'failed';
+  warnings: string[];
+};
+
+export type StoreDirectoryAdapterImportOptions = {
+  mode?: 'full' | 'incremental';
+  previous?: readonly NormalizedStore[];
+  minimumRecords?: number;
+  expectedRecords?: number;
+  maxDropRatio?: number;
+  now?: Date;
+  /** Map a shared-feed chain identifier to the app's stable retailer id. */
+  retailerIdForStore?: (record: NormalizedStore, adapter: RetailerSourceAdapter) => string | undefined;
 };
 
 export type StoreDirectoryScope = {
@@ -435,6 +472,117 @@ function directoryEntryFromRecord(record: NormalizedStore): StoreDirectoryEntry 
     deliveryCapability: record.deliveryCapability ?? 'unsupported',
     retailerUrl: record.retailerUrl,
     openNow: record.openNow ?? null,
+  };
+}
+
+async function collectDirectoryRecordsFromAdapter(
+  adapter: RetailerSourceAdapter,
+  input: Omit<DiscoveryInput, 'retailerId'>,
+): Promise<{ records: NormalizedStore[]; report: StoreDirectoryAdapterReport }> {
+  const report: StoreDirectoryAdapterReport = {
+    adapterId: adapter.metadata.adapterId,
+    retailerId: adapter.retailerId,
+    status: 'failed',
+    discoveredFileCount: 0,
+    storeFileCount: 0,
+    downloadedFileCount: 0,
+    parsedRecordCount: 0,
+    warnings: [],
+    failures: [],
+  };
+  const records: NormalizedStore[] = [];
+  try {
+    const discovered = await adapter.discoverFiles({ ...input, retailerId: adapter.retailerId, documentKinds: ['stores'] });
+    const files = [...new Map(discovered.filter((file) => file.documentKind === 'stores').map((file) => [file.id, file])).values()];
+    report.discoveredFileCount = discovered.length;
+    report.storeFileCount = files.length;
+    if (!files.length) {
+      report.failures.push('no stores document was discovered');
+      return { records, report };
+    }
+    for (const file of files) {
+      try {
+        const downloaded = await adapter.downloadFile(file, input.signal);
+        report.downloadedFileCount += 1;
+        const context: ParseContext = {
+          source: downloaded,
+          metadata: {
+            retailerId: adapter.retailerId,
+            adapterId: adapter.metadata.adapterId,
+            sourceFileId: file.id,
+            sourceUri: file.uri,
+            fileName: file.fileName,
+            documentKind: file.documentKind,
+            publishedAt: file.publishedAt,
+            downloadedAt: downloaded.downloadedAt,
+            checksum: downloaded.checksum,
+          },
+          now: input.now ?? new Date(),
+          warn: (message) => report.warnings.push(`${file.id}: ${message}`),
+        };
+        for await (const record of adapter.parseStores(downloaded, context)) records.push(record);
+        report.parsedRecordCount = records.length;
+      } catch (error) {
+        report.failures.push(`${file.id}: ${error instanceof Error ? error.message : 'store document failed'}`);
+      }
+    }
+  } catch (error) {
+    report.failures.push(error instanceof Error ? error.message : 'directory discovery failed');
+  }
+  if (report.failures.length) report.status = records.length ? 'partial' : 'failed';
+  else if (!records.length) {
+    report.status = 'failed';
+    report.failures.push('stores documents produced no records');
+  } else report.status = 'completed';
+  return { records, report };
+}
+
+/**
+ * Discover and import official retailer `stores` documents into the directory
+ * boundary. This is intentionally separate from the HTTP snapshot loader so a
+ * worker can use the existing authenticated Cerberus or public retailer
+ * adapter, retain per-adapter evidence, and refuse to publish a cross-chain
+ * snapshot when one expected adapter fails.
+ */
+export async function importStoreDirectoryFromAdapters(
+  adapters: readonly RetailerSourceAdapter[],
+  input: Omit<DiscoveryInput, 'retailerId'> = {},
+  options: StoreDirectoryAdapterImportOptions = {},
+): Promise<StoreDirectoryAdapterImportResult> {
+  const collected = await Promise.all(adapters.map((adapter) => collectDirectoryRecordsFromAdapter(adapter, input)));
+  const adapterReports = collected.map((result) => result.report);
+  const candidateRecords = collected.flatMap((result, index) => result.records.map((record) => {
+    const retailerId = options.retailerIdForStore?.(record, adapters[index]!)?.trim();
+    return retailerId ? { ...record, retailerId } : record;
+  }));
+  const importResult = await importStoreDirectory((async function* () { yield* candidateRecords; }()), {
+    mode: options.mode,
+    previous: options.previous,
+    minimumRecords: options.minimumRecords,
+    expectedRecords: options.expectedRecords,
+    maxDropRatio: options.maxDropRatio,
+  });
+  const allAdaptersCompleted = adapters.length > 0 && adapterReports.length === adapters.length && adapterReports.every((report) => report.status === 'completed');
+  const published = allAdaptersCompleted && importResult.published;
+  const safeRecords = published ? importResult.records : [...(options.previous ?? [])];
+  const warnings = [
+    ...importResult.warnings,
+    ...adapterReports.flatMap((report) => report.warnings),
+    ...adapterReports.flatMap((report) => report.failures.map((failure) => `${report.adapterId}: ${failure}`)),
+    ...(adapters.length ? [] : ['no directory adapters were configured']),
+    ...(!allAdaptersCompleted && candidateRecords.length ? ['directory feed is partial; a failed adapter prevented publication'] : []),
+  ];
+  const feedState = published ? 'complete' : candidateRecords.length ? 'partial' : 'failed';
+  return {
+    candidateRecords: importResult.candidateRecords,
+    records: safeRecords,
+    candidateEntries: importResult.candidateRecords.map(directoryEntryFromRecord),
+    entries: safeRecords.map(directoryEntryFromRecord),
+    importResult,
+    adapterReports,
+    published,
+    feedState,
+    warnings: [...new Set(warnings)],
   };
 }
 
