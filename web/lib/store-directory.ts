@@ -138,6 +138,10 @@ export function directoryImportIsSafe(result: StoreDirectoryImportResult, minimu
 
 const colors: Store['color'][] = ['mint', 'blue', 'yellow'];
 
+function displayStoreName(entry: StoreDirectoryEntry) {
+  return entry.name.includes('·') ? `${entry.chainName} ${entry.name}` : `${entry.chainName} · ${entry.name}`;
+}
+
 /** Merge directory coverage with the priced fixture without inventing prices. */
 export function storesFromDirectory(pricedStores: Store[], entries: readonly StoreDirectoryEntry[] = nationwideStoreDirectory): Store[] {
   const pricedById = new Map(pricedStores.map((store) => [store.id, store]));
@@ -146,7 +150,7 @@ export function storesFromDirectory(pricedStores: Store[], entries: readonly Sto
     if (priced) return {
       ...priced,
       chain: entry.chainName,
-      name: `${entry.chainName} · ${entry.name}`,
+      name: displayStoreName(entry),
       address: `${entry.address}, ${entry.city}`,
       coordinates: entry.coordinates,
       distanceKm: null,
@@ -157,7 +161,7 @@ export function storesFromDirectory(pricedStores: Store[], entries: readonly Sto
       id: entry.storeId,
       retailerId: entry.retailerId,
       chain: entry.chainName,
-      name: `${entry.chainName} · ${entry.name}`,
+      name: displayStoreName(entry),
       address: `${entry.address}, ${entry.city}`,
       distanceKm: null,
       color: colors[index % colors.length],
