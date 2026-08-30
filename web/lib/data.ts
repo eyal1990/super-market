@@ -294,6 +294,21 @@ function granularityFromCandidate(candidate: Record<string, unknown>): Geocoding
   return 'unknown';
 }
 
+function containsHebrew(value: string) {
+  return /[\u0590-\u05ff]/.test(value);
+}
+
+function structuredHebrewLabel(candidate: Record<string, unknown>, address: Record<string, unknown> | null) {
+  const street = asString(address?.road ?? address?.street ?? address?.street_name ?? candidate.road ?? candidate.street ?? candidate.name);
+  const houseNumber = asString(address?.house_number ?? candidate.house_number ?? candidate.houseNumber);
+  const city = asString(address?.city ?? address?.town ?? address?.municipality ?? address?.village ?? candidate.city ?? candidate.town);
+  const country = asString(address?.country ?? candidate.country);
+  const streetPart = street ? [street, houseNumber].filter(Boolean).join(' ') : houseNumber;
+  const parts = [streetPart, city, country && containsHebrew(country) ? country : undefined].filter((part): part is string => Boolean(part));
+  const label = parts.join(', ');
+  return label && containsHebrew(label) ? label : undefined;
+}
+
 export function normalizeProviderResults(payload: unknown, provider: string): AddressResult[] {
   const payloadRecord = asRecord(payload);
   const candidates = Array.isArray(payload)
@@ -315,7 +330,9 @@ export function normalizeProviderResults(payload: unknown, provider: string): Ad
     const coordinates = coordinatesFromCandidate(candidate);
     if (!coordinates || !isIsraeliResult(candidate, coordinates)) return null;
     const address = asRecord(candidate.address);
-    const label = asString(candidate.label ?? candidate.displayName ?? candidate.display_name)
+    const providerLabel = asString(candidate.label ?? candidate.displayName ?? candidate.display_name);
+    const label = structuredHebrewLabel(candidate, address)
+      ?? (providerLabel && containsHebrew(providerLabel) ? providerLabel : undefined)
       ?? [candidate.name ?? candidate.street, candidate.city, candidate.country].map(asString).filter(Boolean).join(', ');
     const detail = asString(candidate.detail ?? candidate.city ?? address?.city ?? address?.town ?? address?.municipality ?? address?.county) ?? 'ישראל';
     if (!label) return null;

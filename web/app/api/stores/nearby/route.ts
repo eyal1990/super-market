@@ -14,6 +14,11 @@ export async function GET(request: Request) {
   const url = new URL(request.url); const lat = Number(url.searchParams.get('lat')); const lon = Number(url.searchParams.get('lon'));
   const radius = Number(url.searchParams.get('radius') ?? 10);
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || !Number.isFinite(radius) || radius <= 0 || radius > 100) return NextResponse.json({ error: 'מיקום או רדיוס לא תקינים' }, { status: 400 });
-  const nearby = stores.map((store) => ({ ...store, distanceKm: distanceKm(lat, lon, store.coordinates.lat, store.coordinates.lon) })).filter((store) => store.distanceKm <= radius).sort((a, b) => a.distanceKm - b.distanceKm).map((store) => ({ ...store, distance: formatDistance(store.distanceKm) }));
-  return NextResponse.json({ stores: nearby, radiusKm: radius });
+  const ranked = stores
+    .map((store) => ({ ...store, distanceKm: distanceKm(lat, lon, store.coordinates.lat, store.coordinates.lon) }))
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  const nearby = ranked.filter((store) => store.distanceKm <= radius);
+  const fallbackUsed = nearby.length === 0;
+  const selected = (fallbackUsed ? ranked.slice(0, 3) : nearby).map((store) => ({ ...store, distance: formatDistance(store.distanceKm) }));
+  return NextResponse.json({ stores: selected, radiusKm: radius, fallbackUsed });
 }

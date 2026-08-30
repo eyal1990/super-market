@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   addressQueryWithoutHouseNumber,
   createAddressGeocoder,
+  normalizeProviderResults,
   resolveAddressSearch,
   validateAddressQuery,
 } from '../lib/data.ts';
@@ -58,6 +59,22 @@ test('configured provider results are normalized and limited to Israel', async (
   assert.equal(resolution.results[0]?.isExactAddress, true);
   assert.equal(resolution.results[0]?.coordinates.lon, 34.989);
   assert.equal(resolution.results[1]?.isExactAddress, false);
+});
+
+test('provider labels prefer Hebrew structured address fields over transliterated display names', () => {
+  const results = normalizeProviderResults([
+    {
+      id: 'hebrew-address',
+      display_name: 'Hayotzim 10, Gan Yavne, Israel',
+      address: { road: 'היורה', house_number: '10', town: 'גן יבנה', country_code: 'il' },
+      lat: 31.793,
+      lon: 34.708,
+      type: 'house',
+    },
+  ], 'nominatim');
+
+  assert.equal(results[0]?.label, 'היורה 10, גן יבנה');
+  assert.equal(results[0]?.detail, 'גן יבנה');
 });
 
 test('an exact house miss retries with street and city results', async () => {
