@@ -139,8 +139,9 @@ The original implementation sequence above is closed, but the current product st
 9. [Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
 10. [Show a real product image on every product card](https://github.com/eyal1990/super-market/issues/19)
 11. [Import the complete product catalog for every supported branch](https://github.com/eyal1990/super-market/issues/20)
+12. [Add nationwide Israeli store directory and coverage](https://github.com/eyal1990/super-market/issues/30)
 
-Recommended execution order is #20/#22 first (data and location foundations), then #21/#26/#27/#28 (first-run experience), followed by #19/#23/#25 (product trust and discovery), #24 (delivery handoff), and #29 (full regression coverage).
+Recommended execution order is #20/#22/#30 first (data, location, and branch-directory foundations), then #21/#26/#27/#28 (first-run experience), followed by #19/#23/#25 (product trust and discovery), #24 (delivery handoff), and #29 (full regression coverage).
 
 ## Acceptance baseline
 

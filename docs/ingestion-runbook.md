@@ -29,6 +29,17 @@ The database is disposable local development state. To apply a changed migration
 
 Full documents establish a complete snapshot for the relevant source scope. Incremental documents should be applied in publication order. Do not delete the current valid snapshot until a full document has passed download, parsing, validation, and commit.
 
+### Branch directory refresh
+
+Store documents normalize through `importStoreDirectory()` in
+`web/lib/store-directory.ts`. It validates branch identity, non-empty names,
+and coordinates within Israel; duplicate `retailerId/storeId` rows resolve
+deterministically to the last row in the source stream. A full refresh is safe
+only when the result has no skipped rows and meets the configured minimum row
+count. Keep the previous directory when that gate fails. Incremental refreshes
+must use the same identity keys and preserve active/inactive status rather than
+silently deleting an existing branch.
+
 ## Fixture usage
 
 Tests or a worker can supply `listFiles` and `download` functions to either adapter. A fixture downloader should return a `DownloadedSourceFile` with the fixture bytes, a deterministic checksum, and `compression: 'none'` or `'gzip'`; alternatively, serve the fixture over HTTP and use the default downloader. Keep fixtures small enough for the configured limits and include uppercase/namespaced XML, malformed rows, and gzipped examples.

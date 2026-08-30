@@ -83,6 +83,7 @@ The following issues are the active product backlog for the next usable release.
 9. [#27 — Add explicit shopping mode: physical shopping or delivery](https://github.com/eyal1990/super-market/issues/27)
 10. [#28 — Build a first-time onboarding flow](https://github.com/eyal1990/super-market/issues/28)
 11. [#29 — Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
+12. [#30 — Add nationwide Israeli store directory and coverage](https://github.com/eyal1990/super-market/issues/30)
 
 These tests are intentionally production-neutral. Unit tests verify data and ingestion contracts; Playwright tests exercise browser-only behavior against mocked geocoding and fixture data. `web/tests/location.test.ts` covers provider behavior without requiring a live geocoder.
 
@@ -100,7 +101,7 @@ a retailer link or copied list and never places an order.
 
 ## Data and operations
 
-The app runs with fixture data and does not require retailer credentials. The portable PostgreSQL schema is in [`db/migrations/001_init.sql`](./db/migrations/001_init.sql); start local PostgreSQL with `docker compose up -d postgres` and apply the migration with your preferred PostgreSQL client. The adapter contract and safe ingestion runner live under [`web/lib/ingestion/`](./web/lib/ingestion/), with operational notes in [`docs/ingestion-runbook.md`](./docs/ingestion-runbook.md).
+The app runs with fixture data and does not require retailer credentials. The portable PostgreSQL schema is in [`db/migrations/001_init.sql`](./db/migrations/001_init.sql); start local PostgreSQL with `docker compose up -d postgres` and apply the migration with your preferred PostgreSQL client. The adapter contract and safe ingestion runner live under [`web/lib/ingestion/`](./web/lib/ingestion/), with operational notes in [`docs/ingestion-runbook.md`](./docs/ingestion-runbook.md). The nationwide branch directory is exposed by `GET /api/stores/directory`; its current fixture spans Israeli districts but is explicitly marked representative until an official complete source feed is configured.
 
 Source and UX decisions are recorded in [`docs/source-matrix.md`](./docs/source-matrix.md), [`docs/ux-flows.md`](./docs/ux-flows.md), and [`docs/security-review.md`](./docs/security-review.md). Exact addresses are not persisted; live geocoding must be added behind a cached, rate-limited server proxy before production use.
 

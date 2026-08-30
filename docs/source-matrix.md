@@ -29,6 +29,26 @@ Delivery data is capability metadata only: Shufersal is a partial handoff and
 Rami Levy/Victory are manual-list fallbacks. Delivery coverage and fees are not
 verified by the fixture data.
 
+## Nationwide branch directory contract
+
+`web/lib/store-directory.ts` defines the provider-neutral branch contract and
+ships a representative fixture spanning the north, Haifa, central, Tel Aviv,
+Jerusalem, and south districts. `GET /api/stores/directory` exposes stable
+branch identity, chain, address, city, district, coordinates, active status,
+source, and last-verified metadata with pagination and completeness metadata.
+`importStoreDirectory()` validates Israeli coordinates, rejects malformed rows,
+deduplicates by retailer plus branch identity, and keeps the last valid
+snapshot safe for atomic replacement by a worker. The nearby API uses these
+directory records and never turns an out-of-range request into a fake nearby
+branch.
+
+The committed directory is a development fixture, not a claim that every
+Israeli branch is currently present. A production rollout must configure an
+official or permissioned branch feed, run a full snapshot validation, and only
+publish it when row counts, identifiers, coordinates, and source timestamps
+pass the ingestion gate. This limitation is returned in both the directory and
+nearby APIs and shown in the branch-selection UI.
+
 ## Licensing and attribution
 
 The implementation follows the behavior described by public reference projects but does not copy their code or make them runtime dependencies. Reference links and source limitations are retained in [`price-data-investigation.md`](./price-data-investigation.md). Retailer data is shown with freshness and a checkout disclaimer. Shufersal's public transparency portal is linked from the UI source attribution.
