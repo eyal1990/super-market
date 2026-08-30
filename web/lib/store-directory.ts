@@ -52,7 +52,7 @@ export type StoreDirectoryCompleteness = {
   scope: StoreDirectoryScope;
   limitations: string[];
   warnings: string[];
-  sourceState: 'fixture' | 'live' | 'stale-fallback';
+  sourceState: 'fixture' | 'live' | 'stale-fallback' | 'mixed';
   refreshAttempted: boolean;
 };
 
@@ -86,7 +86,7 @@ export const storeDirectorySourceContract: StoreDirectorySourceContract = {
 
 export const IRON_BRANCHES_RESOURCE_ID = 'f7d9c47e-3414-4524-a187-a0f0e057b08a';
 export const IRON_BRANCHES_SOURCE_URL = `https://data.gov.il/he/datasets/moital/iron-branches/${IRON_BRANCHES_RESOURCE_ID}`;
-export const IRON_BRANCHES_DATASTORE_URL = `https://data.gov.il/api/3/action/datastore_search?resource_id=${IRON_BRANCHES_RESOURCE_ID}`;
+export const IRON_BRANCHES_DATASTORE_URL = `https://data.gov.il/api/3/action/datastore_search?resource_id=${IRON_BRANCHES_RESOURCE_ID}&limit=1000`;
 
 /** Public sources investigated for this directory; none is a complete cross-chain inventory. */
 export const officialDirectorySources = [
@@ -509,9 +509,40 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), directoryFetchTimeoutMs);
     try {
-      const response = await fetchImpl(endpoint, { headers: { accept: 'application/json' }, signal: controller.signal });
-      if (!response.ok) throw new Error(`directory source returned ${response.status}`);
-      const payload = await readBoundedJson(response);
+      const fetchPage = async (url: string) => {
+        const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: controller.signal });
+        if (!response.ok) throw new Error(`directory source returned ${response.status}`);
+        const payload = await readBoundedJson(response);
+        if (payload && typeof payload === 'object' && !Array.isArray(payload) && (payload as Record<string, unknown>).success === false) throw new Error('directory CKAN source reported failure');
+        return payload;
+      };
+      let payload = await fetchPage(endpoint);
+      const parsedSource = new URL(endpoint);
+      const isCkanDataStore = parsedSource.pathname.endsWith('/datastore_search') && parsedSource.searchParams.has('resource_id');
+      if (isCkanDataStore) {
+        const firstRecords = externalRecords(payload);
+        const result = payload && typeof payload === 'object' && !Array.isArray(payload) && (payload as Record<string, unknown>).result && typeof (payload as Record<string, unknown>).result === 'object'
+          ? (payload as Record<string, unknown>).result as Record<string, unknown> : {};
+        const total = numericValue(result.total);
+        const requestedLimit = Math.max(1, Math.min(1000, Math.floor(numericValue(parsedSource.searchParams.get('limit')) ?? 1000)));
+        const records = [...firstRecords];
+        let offset = (numericValue(parsedSource.searchParams.get('offset')) ?? 0) + records.length;
+        let pageCount = 1;
+        while (pageCount < 50 && (total === null ? firstRecords.length >= requestedLimit : records.length < total)) {
+          const nextUrl = new URL(endpoint);
+          nextUrl.searchParams.set('limit', String(requestedLimit));
+          nextUrl.searchParams.set('offset', String(offset));
+          const nextPayload = await fetchPage(nextUrl.toString());
+          const nextRecords = externalRecords(nextPayload);
+          records.push(...nextRecords);
+          pageCount += 1;
+          if (!nextRecords.length || nextRecords.length < requestedLimit) break;
+          offset += nextRecords.length;
+        }
+        if (total !== null && records.length < total) throw new Error(`directory CKAN source pagination incomplete (${records.length}/${total})`);
+        const root = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+        payload = { ...root, result: { ...result, records } };
+      }
       const rawRecords = externalRecords(payload);
       const normalized: NormalizedStore[] = [];
       let invalidCount = 0;
@@ -568,18 +599,78 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
   }
 }
 
+function directoryEntryTimestamp(entry: StoreDirectoryEntry): number {
+  const timestamp = new Date(entry.verifiedAt || entry.lastVerified).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/** Merge independently validated official snapshots without widening completeness claims. */
+export function mergeStoreDirectoryLoads(results: readonly StoreDirectoryLoadResult[]): StoreDirectoryLoadResult {
+  const configuredResults = results.filter((result) => result.completeness.dataset === 'configured-source');
+  const failedResults = results.filter((result) => result.completeness.dataset !== 'configured-source');
+  const byIdentity = new Map<string, StoreDirectoryEntry>();
+  for (const result of configuredResults) for (const entry of result.entries) {
+    const key = `${entry.retailerId}:${entry.storeId}`.toLocaleLowerCase('en-US');
+    const existing = byIdentity.get(key);
+    if (!existing || directoryEntryTimestamp(entry) > directoryEntryTimestamp(existing) || (directoryEntryTimestamp(entry) === directoryEntryTimestamp(existing) && entry.source.localeCompare(existing.source, 'en-US') > 0)) byIdentity.set(key, entry);
+  }
+  const entries = [...byIdentity.values()].sort((left, right) => `${left.retailerId}:${left.storeId}`.localeCompare(`${right.retailerId}:${right.storeId}`, 'en-US'));
+  const limitations = [...new Set(results.flatMap((result) => result.completeness.limitations))];
+  const warnings = [...new Set(results.flatMap((result) => result.completeness.warnings))];
+  const lastVerified = entries.map((entry) => entry.verifiedAt || entry.lastVerified).sort().at(-1) ?? new Date(0).toISOString();
+  const sources = [...new Set(entries.map((entry) => entry.source))].sort();
+  return {
+    entries,
+    completeness: {
+      dataset: 'configured-source',
+      coverageStatus: 'configured-partial',
+      branchCount: entries.length,
+      districtCount: new Set(entries.map((entry) => entry.district).filter(Boolean)).size,
+      supportedChains: [...new Set(entries.map((entry) => entry.chainId))].sort(),
+      source: sources.join(',') || 'configured-source',
+      lastVerified,
+      scope: { id: 'multi-source-configured', countryCode: 'IL', expectedChains: [...new Set(entries.map((entry) => entry.chainId))].sort() },
+      limitations: [...limitations, 'multiple source snapshots were merged; combined coverage remains partial until a manifest proves the complete shared scope'],
+      warnings,
+      sourceState: failedResults.length || configuredResults.some((result) => result.completeness.sourceState !== 'live') ? 'mixed' : 'live',
+      refreshAttempted: true,
+    },
+  };
+}
+
 export async function loadStoreDirectory(fetchImpl: typeof fetch = fetch, options: { forceRefresh?: boolean } = {}): Promise<StoreDirectoryLoadResult> {
-  const endpoint = process.env.STORE_DIRECTORY_URL?.trim();
-  if (!endpoint) return { entries: nationwideStoreDirectory, completeness: storeDirectoryCompleteness };
-  const cached = directoryCache.get(endpoint);
+  const endpoints = [...new Set([...(process.env.STORE_DIRECTORY_URLS?.split(',') ?? []), process.env.STORE_DIRECTORY_URL ?? ''].map((endpoint) => endpoint.trim()).filter(Boolean))];
+  if (!endpoints.length) return { entries: nationwideStoreDirectory, completeness: storeDirectoryCompleteness };
+  const cacheKey = endpoints.join('|');
+  const cached = directoryCache.get(cacheKey);
   if (!options.forceRefresh && cached && cached.expiresAt > Date.now()) return cached.result;
-  const pending = directoryInflight.get(endpoint);
+  const pending = directoryInflight.get(cacheKey);
   if (pending) return pending;
-  const request = fetchConfiguredDirectory(endpoint, fetchImpl);
-  directoryInflight.set(endpoint, request);
+  const request = (async () => {
+    const results = await Promise.all(endpoints.map((endpoint) => fetchConfiguredDirectory(endpoint, fetchImpl)));
+    if (results.length === 1) return results[0]!;
+    const configuredResults = results.filter((result) => result.completeness.dataset === 'configured-source');
+    if (!configuredResults.length) {
+      const fallback = results[0] ?? { entries: nationwideStoreDirectory, completeness: storeDirectoryCompleteness };
+      return {
+        entries: fallback.entries,
+        completeness: {
+          ...fallback.completeness,
+          warnings: [...new Set(results.flatMap((result) => result.completeness.warnings))],
+          limitations: [...new Set(results.flatMap((result) => result.completeness.limitations))],
+          sourceState: 'stale-fallback' as const,
+          refreshAttempted: true,
+        },
+      };
+    }
+    return mergeStoreDirectoryLoads(results);
+  })();
+  directoryInflight.set(cacheKey, request);
   try {
-    return await request;
+    const result = await request;
+    directoryCache.set(cacheKey, { expiresAt: Date.now() + directoryCacheTtlMs, result });
+    return result;
   } finally {
-    if (directoryInflight.get(endpoint) === request) directoryInflight.delete(endpoint);
+    if (directoryInflight.get(cacheKey) === request) directoryInflight.delete(cacheKey);
   }
 }

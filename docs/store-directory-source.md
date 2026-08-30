@@ -13,7 +13,7 @@ is a useful public source for emergency-open branches. Its DataStore resource
 ID is `f7d9c47e-3414-4524-a187-a0f0e057b08a`; the corresponding CKAN endpoint is:
 
 ```text
-https://data.gov.il/api/3/action/datastore_search?resource_id=f7d9c47e-3414-4524-a187-a0f0e057b08a
+https://data.gov.il/api/3/action/datastore_search?resource_id=f7d9c47e-3414-4524-a187-a0f0e057b08a&limit=1000
 ```
 
 The source is not a complete supermarket directory: it is an emergency
@@ -33,10 +33,14 @@ complete cross-chain national coverage.
 
 ## Configuration and safety
 
-Set `STORE_DIRECTORY_URL` server-side to the CKAN endpoint or to an operator-
-published normalized snapshot. Do not put credentials or the endpoint in the
-browser. `GET /api/stores/directory?refresh=1` requests a bounded refresh;
-normal requests use the five-minute cache.
+Set `STORE_DIRECTORY_URL` server-side to one CKAN endpoint or normalized
+snapshot. For a multi-source merge, set `STORE_DIRECTORY_URLS` to a
+comma-separated list. Each source is validated independently, then rows are
+deduplicated by `retailerId:storeId`; a failed source cannot erase another
+valid source. Do not put credentials or endpoints in the browser.
+`GET /api/stores/directory?refresh=1` requests a bounded refresh; normal
+requests use the five-minute cache. CKAN DataStore endpoints are paged until
+their reported `total` is consumed (with a bounded page/row limit).
 
 The accepted normalized row shape is:
 

@@ -141,6 +141,53 @@ test('Iron Branches CKAN/DataStore rows are imported from ITM as an explicitly p
   }
 });
 
+test('CKAN DataStore pagination consumes every page up to the reported total', async () => {
+  const endpoint = `${IRON_BRANCHES_DATASTORE_URL.replace('limit=1000', 'limit=2')}&offset=0`;
+  const rows = [
+    { id: 'iron-1', chain: 'רשת א', branch: 'אחד', city: 'תל אביב', address: 'אבן גבירול 1', X: 178700, Y: 665000, report_date: '2026-08-20' },
+    { id: 'iron-2', chain: 'רשת א', branch: 'שתיים', city: 'חיפה', address: 'חורב 2', X: 200000, Y: 750000, report_date: '2026-08-20' },
+    { id: 'iron-3', chain: 'רשת ב', branch: 'שלוש', city: 'באר שבע', address: 'השלום 3', X: 180000, Y: 570000, report_date: '2026-08-20' },
+  ];
+  process.env.STORE_DIRECTORY_URL = endpoint;
+  try {
+    const requestedOffsets: string[] = [];
+    const result = await loadStoreDirectory(async (input) => {
+      const url = new URL(String(input));
+      requestedOffsets.push(url.searchParams.get('offset') ?? 'missing');
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      return new Response(JSON.stringify({ success: true, result: { records: rows.slice(offset, offset + 2), total: rows.length, last_modified: '2026-08-20T00:00:00Z' } }), { status: 200 });
+    }, { forceRefresh: true });
+    assert.equal(result.entries.length, 3);
+    assert.deepEqual(requestedOffsets, ['0', '2']);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URL;
+  }
+});
+
+test('multiple validated source snapshots merge deterministically and remain partial', async () => {
+  const first = 'https://fixture.invalid/directory-source-a.json';
+  const second = 'https://fixture.invalid/directory-source-b.json';
+  const failed = 'https://fixture.invalid/directory-source-failed.json';
+  process.env.STORE_DIRECTORY_URLS = `${first},${second},${failed}`;
+  try {
+    const result = await loadStoreDirectory(async (input) => {
+      const url = String(input);
+      if (url === failed) return new Response('unavailable', { status: 503 });
+      const newer = url === second;
+      return new Response(JSON.stringify([record({ retailerId: 'fixture-chain', storeId: 'branch-1', name: newer ? 'newer branch' : 'older branch', source: { ...source, sourceUri: url, publishedAt: newer ? '2026-08-31T00:00:00Z' : '2026-08-30T00:00:00Z' } })]), { status: 200 });
+    }, { forceRefresh: true });
+    assert.equal(result.entries.length, 1);
+    assert.equal(result.entries[0]?.name, 'newer branch');
+    assert.equal(result.completeness.coverageStatus, 'configured-partial');
+    assert.equal(result.completeness.sourceState, 'mixed');
+    assert.match(result.completeness.source, /directory-source-b/);
+    assert.match(result.completeness.warnings.join(' '), /503/);
+    assert.ok(result.completeness.limitations.length > 0);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URLS;
+  }
+});
+
 test('incremental directory refresh is idempotent and preserves prior branches', async () => {
   const first = await importStoreDirectory((async function* () { yield record({ storeId: '001' }); })(), { mode: 'full' });
   const delta = record({ storeId: '002', name: 'סניף נוסף', source: { ...source, sourceFileId: 'stores-incremental', publishedAt: '2026-08-31T08:00:00Z' } });
