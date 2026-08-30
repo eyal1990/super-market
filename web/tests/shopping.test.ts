@@ -20,11 +20,13 @@ test('trust state distinguishes fresh, stale, unavailable and unknown prices', (
   const stale = { ...fresh, updatedAt: '2026-08-28T08:00:00+03:00' };
   const unavailable = { ...fresh, amount: null, available: false };
   const unknown = { ...fresh, updatedAt: '' };
+  const malformed = { ...fresh, updatedAt: 'not-a-timestamp' };
   const now = new Date('2026-08-30T10:00:00+03:00');
   assert.equal(priceTrustState(fresh, now), 'fresh');
   assert.equal(priceTrustState(stale, now), 'stale');
   assert.equal(priceTrustState(unavailable, now), 'unavailable');
   assert.equal(priceTrustState(unknown, now), 'unknown');
+  assert.equal(priceTrustState(malformed, now), 'unknown');
   assert.equal(isPriceStale(stale, now), true);
   assert.equal(freshnessLabel(fresh.updatedAt, now), 'נבדק לפני 2 שעות');
 });

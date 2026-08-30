@@ -46,7 +46,10 @@ export function getCatalogBranchCoverage(
     const prices = catalogProducts.map((product) => getPrice(product, store.id));
     const pricedProducts = prices.filter((price) => price.updatedAt && price.source).length;
     const availableProducts = prices.filter((price) => price.available && price.amount !== null).length;
-    const staleProducts = prices.filter((price) => price.available && price.amount !== null && price.updatedAt && now.getTime() - new Date(price.updatedAt).getTime() > 24 * 60 * 60 * 1000).length;
+    const staleProducts = prices.filter((price) => {
+      const timestamp = price.updatedAt ? new Date(price.updatedAt).getTime() : Number.NaN;
+      return price.available && price.amount !== null && Number.isFinite(timestamp) && now.getTime() - timestamp > 24 * 60 * 60 * 1000;
+    }).length;
     const unavailableProducts = prices.filter((price) => !price.available || price.amount === null).length;
     return { storeId: store.id, pricedProducts, availableProducts, staleProducts, unavailableProducts, complete: pricedProducts === catalogProducts.length };
   });
@@ -85,9 +88,10 @@ export function validateBasketItems(items: unknown): Basket | null {
   return safe;
 }
 
-export function buildDeliveryHandoff(items: Basket, storeId: string, now = new Date()): DeliveryHandoff | null {
-  const store = stores.find((candidate) => candidate.id === storeId);
+export function buildDeliveryHandoff(items: Basket, storeId: string, now = new Date(), catalogStores: readonly Store[] = stores): DeliveryHandoff | null {
+  const store = catalogStores.find((candidate) => candidate.id === storeId);
   if (!store) return null;
+  if (store.delivery.capability === 'unsupported') return null;
   const handoffItems: HandoffItem[] = [];
   const warnings: string[] = [];
   for (const [productId, quantity] of Object.entries(items)) {

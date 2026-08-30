@@ -7,7 +7,7 @@ import type { NormalizedStore } from '../lib/ingestion/types.ts';
 const source = { retailerId: 'fixture', adapterId: 'fixture', sourceFileId: 'stores-full', sourceUri: 'fixture://stores', fileName: 'Stores.xml', documentKind: 'stores' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'fixture' };
 
 function record(overrides: Partial<NormalizedStore> = {}): NormalizedStore {
-  return { retailerId: 'fixture', storeId: '001', name: 'סניף בדיקה', city: 'תל אביב-יפו', latitude: 32.08, longitude: 34.78, source, ...overrides };
+  return { retailerId: 'fixture', storeId: '001', name: 'סניף בדיקה', address: 'אבן גבירול 1', city: 'תל אביב-יפו', latitude: 32.08, longitude: 34.78, source, ...overrides };
 }
 
 test('the directory fixture spans Israel and is explicitly partial', () => {
@@ -44,10 +44,11 @@ test('a configured complete directory source is loaded, cached, and exposed as c
     let calls = 0;
     const result = await loadStoreDirectory(async () => {
       calls += 1;
-      return new Response(JSON.stringify({ stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
+      return new Response(JSON.stringify({ complete: true, stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
     });
     const cached = await loadStoreDirectory(async () => { calls += 1; return new Response('{}', { status: 500 }); });
     assert.equal(result.completeness.dataset, 'configured-source');
+    assert.equal(result.completeness.coverageStatus, 'configured-complete');
     assert.equal(result.entries[0]?.storeId, 'live-1');
     assert.equal(cached.entries[0]?.storeId, 'live-1');
     assert.equal(calls, 1);

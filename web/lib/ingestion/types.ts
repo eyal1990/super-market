@@ -73,10 +73,13 @@ export interface NormalizedStore {
   name: string;
   address?: string;
   city?: string;
+  district?: string;
   postalCode?: string;
   latitude?: number;
   longitude?: number;
   isActive?: boolean;
+  openNow?: boolean | null;
+  deliveryCapability?: 'deep_link' | 'partial' | 'manual' | 'unsupported';
   source: SourceMetadata;
 }
 

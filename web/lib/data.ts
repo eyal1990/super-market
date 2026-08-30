@@ -7,7 +7,7 @@ export type Store = {
   distanceKm: number;
   color: 'mint' | 'blue' | 'yellow';
   coordinates: { lat: number; lon: number };
-  openNow: boolean;
+  openNow: boolean | null;
   delivery: {
     capability: 'deep_link' | 'partial' | 'manual' | 'unsupported';
     retailerUrl?: string;
@@ -173,13 +173,14 @@ export type PriceTrustState = 'fresh' | 'stale' | 'unavailable' | 'unknown';
 
 export function isPriceStale(price: PriceObservation, now = new Date(), staleAfterHours = 24) {
   if (!price.updatedAt || !price.available) return false;
-  const updated = new Date(price.updatedAt);
-  return Number.isNaN(updated.getTime()) || now.getTime() - updated.getTime() > staleAfterHours * 60 * 60 * 1000;
+  const updated = new Date(price.updatedAt).getTime();
+  return Number.isFinite(updated) && now.getTime() - updated > staleAfterHours * 60 * 60 * 1000;
 }
 
 export function priceTrustState(price: PriceObservation, now = new Date()): PriceTrustState {
   if (!price.available || price.amount === null) return 'unavailable';
   if (!price.updatedAt) return 'unknown';
+  if (!Number.isFinite(new Date(price.updatedAt).getTime())) return 'unknown';
   return isPriceStale(price, now) ? 'stale' : 'fresh';
 }
 
