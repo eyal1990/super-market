@@ -82,6 +82,8 @@ export default function Home() {
   const modeHydrated = useRef(false);
   const physicalStoresRef = useRef<Store[]>([]);
   const shoppingModeRef = useRef<ShoppingMode>(shoppingMode);
+  const nearbyRequestId = useRef(0);
+  const modalReturnFocus = useRef<HTMLElement | null>(null);
   const pendingDirectoryAddress = useRef<string | null>(null);
   const skipNextDirectorySearch = useRef<string | null>(null);
   const [addressSearchNonce, setAddressSearchNonce] = useState(0);
@@ -93,13 +95,24 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!locationOpen) return;
+    if (!locationOpen && !compareOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setLocationOpen(false);
+      if (event.key !== 'Escape') return;
+      if (compareOpen) setCompareOpen(false);
+      else setLocationOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [locationOpen]);
+  }, [compareOpen, locationOpen]);
+
+  useEffect(() => {
+    if (locationOpen || compareOpen) {
+      modalReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      return;
+    }
+    modalReturnFocus.current?.focus();
+    modalReturnFocus.current = null;
+  }, [compareOpen, locationOpen]);
 
   useEffect(() => {
     shoppingModeRef.current = shoppingMode;
@@ -317,6 +330,7 @@ export default function Home() {
   }
 
   async function loadNearbyStores(label: string, latitude: number, longitude: number, source: LocationSelection['source']) {
+    const requestId = ++nearbyRequestId.current;
     setLocationError('');
     setLocationNotice('');
     setLoadingStores(true);
@@ -329,6 +343,7 @@ export default function Home() {
       const response = await fetch(`/api/stores/nearby?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}&mode=physical`);
       if (!response.ok) throw new Error('nearby stores request failed');
       const payload = await response.json() as { stores?: Store[]; fallbackUsed?: boolean; limitations?: string[] };
+      if (requestId !== nearbyRequestId.current) return;
       const foundStores = Array.isArray(payload.stores) ? payload.stores : [];
       if (!foundStores.length) {
         setLocation({ label, source, status: 'unresolved' });
@@ -343,10 +358,11 @@ export default function Home() {
       setLocationOpen(false);
       setLiveMessage(payload.fallbackUsed ? `לא נמצאו סניפים בטווח המבוקש; מוצגים הסניפים הקרובים ביותר ל${label}` : `נמצאו ${foundStores.length} סניפים ליד ${label}`);
     } catch {
+      if (requestId !== nearbyRequestId.current) return;
       setLocation({ label, source, status: 'unresolved' });
       setLocationError('לא הצלחנו לטעון סניפים כרגע. נסו שוב או חפשו כתובת אחרת.');
     } finally {
-      setLoadingStores(false);
+      if (requestId === nearbyRequestId.current) setLoadingStores(false);
     }
   }
 

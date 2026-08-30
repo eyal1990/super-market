@@ -98,6 +98,12 @@ function directoryIdentity(record: NormalizedStore) {
   return `${record.retailerId}:${record.storeId}`.toLocaleLowerCase('en-US');
 }
 
+function directoryRecordTime(record: NormalizedStore) {
+  const value = record.source.publishedAt ?? record.source.downloadedAt;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function validCoordinate(latitude: number | undefined, longitude: number | undefined) {
   return latitude !== undefined && longitude !== undefined && Number.isFinite(latitude) && Number.isFinite(longitude)
     && latitude >= israelBounds.minLat && latitude <= israelBounds.maxLat && longitude >= israelBounds.minLon && longitude <= israelBounds.maxLon;
@@ -116,8 +122,11 @@ export async function importStoreDirectory(records: AsyncIterable<NormalizedStor
       continue;
     }
     const key = directoryIdentity(record);
-    if (byIdentity.has(key)) duplicateCount += 1;
-    byIdentity.set(key, { ...record, isActive: record.isActive ?? true });
+    const existing = byIdentity.get(key);
+    if (existing) duplicateCount += 1;
+    if (!existing || directoryRecordTime(record) >= directoryRecordTime(existing)) {
+      byIdentity.set(key, { ...record, isActive: record.isActive ?? true });
+    }
   }
   return { records: [...byIdentity.values()].sort((left, right) => directoryIdentity(left).localeCompare(directoryIdentity(right))), duplicateCount, skippedCount, warnings };
 }

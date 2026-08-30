@@ -30,6 +30,14 @@ test('directory imports validate Israel coordinates, deduplicate, and keep the l
   assert.equal(directoryImportIsSafe(result), false);
 });
 
+test('directory imports use source timestamps when duplicate rows arrive out of order', async () => {
+  const result = await importStoreDirectory((async function* () {
+    yield record({ name: '×¡× ×™×£ ×—×“×©', source: { ...source, publishedAt: '2026-08-30T10:00:00Z' } });
+    yield record({ name: '×¡× ×™×£ ×™×©×Ÿ', source: { ...source, publishedAt: '2026-08-29T10:00:00Z' } });
+  })());
+  assert.equal(result.records[0]?.name, '×¡× ×™×£ ×—×“×©');
+});
+
 test('directory merge retains priced branches and does not invent price observations', () => {
   const merged = storesFromDirectory(stores);
   assert.equal(merged.length, nationwideStoreDirectory.length);
