@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runIngestion } from '../lib/ingestion/core.ts';
-import { createConfiguredAdapterRegistry, createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
+import { createCerberusAdapter, createConfiguredAdapterRegistry, createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
 import { parseCerberusPrices } from '../lib/ingestion/adapters/cerberus.ts';
 import { catalogImportIsSafe, importCatalogFromAdapter, importCatalogPrices, loadConfiguredCatalog, materializeCatalogProducts } from '../lib/ingestion/catalog.ts';
 import type { DownloadedSourceFile, RetailerSourceAdapter, SourceFile } from '../lib/ingestion/types.ts';
@@ -17,6 +17,24 @@ test('Shufersal discovery recognizes current numeric branch filename patterns', 
   assert.equal(files[0].documentKind, 'price_incremental');
   assert.equal(files[0].storeId, '003');
   assert.equal(files[1].documentKind, 'stores');
+});
+
+test('Shufersal discovery follows public transparency pagination and direct blob links', async () => {
+  const pages = new Map([
+    ['https://prices.shufersal.co.il/?page=1', '<a href="/?page=2">next</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz">download</a>'],
+    ['https://prices.shufersal.co.il/?page=2', '<a href="/?page=1">previous</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-002-20260830-030000.gz">download</a>'],
+  ]);
+  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', maxListingPages: 5, fetchImpl: async (input) => new Response(pages.get(String(input)) ?? '', { status: 200 }) });
+  const files = await adapter.discoverFiles({ retailerId: 'shufersal', documentKinds: ['price_full'] });
+  assert.deepEqual(files.map((file) => file.storeId), ['001', '002']);
+  assert.ok(files.every((file) => file.uri.startsWith('https://pricesprodpublic.blob.core.windows.net/')));
+});
+
+test('Cerberus public web endpoint remains observable as credential-gated', async () => {
+  const adapter = createCerberusAdapter({ listingUrl: 'https://url.retail.publishedprices.co.il/', fetchImpl: async () => new Response('<form><input name="Username"><input name="Password"></form>', { status: 200 }) });
+  const files = await adapter.discoverFiles({ retailerId: 'cerberus', documentKinds: ['price_full'] });
+  assert.deepEqual(files, []);
+  assert.equal(adapter.metadata.requiresAuthentication, true);
 });
 
 test('configured adapter registry reads listing surfaces without making credentials implicit', () => {
@@ -108,11 +126,30 @@ test('catalog materialization retains product metadata, source provenance, image
   assert.deepEqual(product.branchAvailability, { 'branch-a': true, 'branch-b': false });
 });
 
-test('configured catalog snapshots require a declared scope and are cached after validation', async () => {
+test('weighted identities and public/club promotions survive catalog materialization without branch leakage', async () => {
+  const source = { retailerId: 'fixture', adapterId: 'fixture-feed', sourceFileId: 'catalog-promotions', sourceUri: 'fixture://catalog-promotions', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'promotions' };
+  const promotion = (storeId: string | undefined, promotionId: string, isClubOnly: boolean) => ({ retailerId: 'fixture', storeId, promotionId, description: promotionId, startsAt: '2026-08-30T00:00:00Z', endsAt: '2026-09-03T00:00:00Z', minimumQuantity: 2, promotionalPriceNis: isClubOnly ? 4 : 5, clubId: isClubOnly ? 'club-1' : undefined, isClubOnly, retailerItemIds: ['plu-1'], source });
+  const result = await importCatalogPrices((async function* () {
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'plu-1', barcode: '999', productName: 'Weighted apples', priceNis: 8, quantity: 1, unitOfMeasure: 'kg', isWeighted: true, observedAt: '2026-08-30T08:00:00Z', source };
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'plu-2', barcode: '999', productName: 'Weighted pears', priceNis: 9, quantity: 1, unitOfMeasure: 'kg', isWeighted: true, observedAt: '2026-08-30T08:00:00Z', source };
+    yield { retailerId: 'fixture', storeId: 'branch-b', retailerItemId: 'plu-1', barcode: '999', productName: 'Weighted apples', priceNis: 7, quantity: 1, unitOfMeasure: 'kg', isWeighted: true, observedAt: '2026-08-30T08:00:00Z', source };
+  })(), { promotions: [promotion(undefined, 'public-buy-two', false), promotion('branch-a', 'club-branch-a', true)] });
+  assert.equal(result.published, true);
+  assert.equal(result.records.length, 3);
+  assert.equal(result.promotions.length, 2);
+  assert.equal(result.records.find((record) => record.storeId === 'branch-a' && record.retailerItemId === 'plu-1')?.promotions.length, 2);
+  assert.equal(result.records.find((record) => record.storeId === 'branch-b' && record.retailerItemId === 'plu-1')?.promotions.length, 1);
+  const products = materializeCatalogProducts(result.records);
+  assert.equal(products.length, 2);
+  assert.deepEqual(products.find((product) => product.name === 'Weighted apples')?.promotions.map((item) => item.id), ['public-buy-two']);
+});
+
+test('configured catalog snapshots require a source manifest and are cached after validation', async () => {
   const endpoint = 'https://fixture.invalid/catalog-complete-20260830.json';
   const source = { retailerId: 'fixture', adapterId: 'fixture-feed', sourceFileId: 'full-1', sourceUri: 'fixture://full-1', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'full-1' };
   const payload = {
     complete: true,
+    manifest: { schemaVersion: '1', sourceId: 'fixture-catalog-2026-08', sourceUri: 'https://fixture.example/catalog.json', sourceVersion: '2026-08-30', countryCode: 'IL', asOf: '2026-08-30T08:00:00Z', usage: { kind: 'permissioned', termsUrl: 'https://fixture.example/terms' }, coverage: { expectedRecordCount: 2, expectedProductCount: 1, expectedBranchCount: 2, retailers: [{ retailerId: 'fixture', branchIds: ['north', 'south'], expectedRecordCount: 2, expectedProductCount: 1 }] } },
     completeness: { scope: { id: 'fixture-catalog-2026-08', countryCode: 'IL', sourceVersion: '2026-08-30', asOf: '2026-08-30T08:00:00Z', expectedRecordCount: 2, expectedProductCount: 1, expectedBranchCount: 2, expectedRetailers: ['fixture'] } },
     records: [
       { retailerId: 'fixture', storeId: 'north', retailerItemId: 'milk', barcode: '100', productName: 'חלב', priceNis: 7, observedAt: '2026-08-30T08:00:00Z', source },

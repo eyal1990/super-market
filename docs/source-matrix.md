@@ -4,8 +4,8 @@ Validated 2026-08-30 for implementation planning. Live source formats remain rep
 
 | Source family | Current evidence | Adapter status | Known limitation |
 | --- | --- | --- | --- |
-| Cerberus shared feed | Public web client reachable at `https://url.retail.publishedprices.co.il/`; FTP/TLS access and retailer credentials are deployment-dependent | Fixture-compatible adapter with discovery metadata | Built-in downloader intentionally handles HTTP(S); inject an FTP/TLS downloader in the worker. Filename/store conventions must be verified per retailer. |
-| Shufersal transparency portal | `https://prices.shufersal.co.il/` currently lists GZ `stores`, `price`, and `promofull` documents with paginated branch rows | Portal adapter with case-insensitive XML parser and pagination metadata | Session/cookie, download URL, and geo/network behavior must be monitored; portal changes produce a failed health run. |
+| Cerberus shared feed | The public web client at `https://url.retail.publishedprices.co.il/` currently presents a username/password login; an account is required before files can be discovered | Fixture-compatible adapter with explicit credential-gated metadata | No credentials are committed or assumed. The production worker must inject an approved FTP/TLS/HTTP downloader and a permissioned account. A login page is observable as zero discovered files, never as complete coverage. |
+| Shufersal transparency portal | The official portal at `https://prices.shufersal.co.il/` currently exposes paginated `pricefull` and `promofull` rows whose download links resolve to public Azure Blob GZ objects | Portal adapter with case-insensitive XML parser, direct blob links, and bounded pagination | Public reachability is not a redistribution licence. Written permission/open-data terms and a branch/product count manifest are still required before publication. |
 | Ministry of Economy “Israel Basket” | Official open-data dataset at [`data.gov.il/he/datasets/moital/israel-sal`](https://data.gov.il/he/datasets/moital/israel-sal) | Reference-only branch/catalog input; transform it into the normalized import contract before use | It is a Carrefour program subset, not every Israeli chain, and the published branch rows do not provide coordinates required by nearby search without a separate permitted enrichment step. |
 | Ministry controlled/imported food datasets | Official open datasets for [controlled consumer prices](https://data.gov.il/he/datasets/moital/price_controlled_consumer_products) and [imported-food selling points](https://data.gov.il/he/datasets/moital/import_quotas) | Reference-price validation only; never used as retailer checkout prices | They do not provide a complete branch-level supermarket catalog or current per-branch price/promotions feed. |
 | Other chains | No source is promoted without current schema and permission evidence | Fixture branch metadata only; delivery handoff is manual | Use the adapter contract and add a fixture before production activation. |
@@ -24,21 +24,37 @@ every discovered full-price document through that gate, while
 scope declares Israel, version, as-of time, and matching record/product/branch
 counts; otherwise the result is visibly partial.
 
+### Required publication manifest
+
+A legacy `completeness.scope` object is accepted for backwards-compatible
+fixture work but can only produce `configured-partial`. A complete claim must
+include a top-level `manifest` with `schemaVersion: "1"`, a source URI,
+version, `countryCode: "IL"`, `asOf`, an `usage` record (`open-data` or
+`permissioned` plus a terms URL), and `coverage.retailers`. Every coverage
+target names the retailer, exact branch IDs, and its expected record count;
+the global record/product/branch counts must equal the normalized output.
+Malformed source metadata, missing freshness, invalid usage evidence, missing
+branches, or any count mismatch fails the refresh and preserves the prior
+snapshot. This is an operator evidence gate, not a legal determination.
+
 The JSON snapshot contract is intentionally small and provider-neutral:
 
 ```json
 {
   "complete": true,
-  "completeness": {
-    "scope": {
-      "id": "retailer-2026-08-30",
-      "countryCode": "IL",
-      "sourceVersion": "2026-08-30",
-      "asOf": "2026-08-30T04:00:00Z",
+  "manifest": {
+    "schemaVersion": "1",
+    "sourceId": "retailer-catalog",
+    "sourceUri": "https://feeds.example.invalid/catalog.json",
+    "sourceVersion": "2026-08-30",
+    "countryCode": "IL",
+    "asOf": "2026-08-30T04:00:00Z",
+    "usage": { "kind": "permissioned", "termsUrl": "https://feeds.example.invalid/terms" },
+    "coverage": {
       "expectedRecordCount": 120000,
       "expectedProductCount": 30000,
       "expectedBranchCount": 120,
-      "expectedRetailers": ["example-retailer"]
+      "retailers": [{ "retailerId": "example-retailer", "branchIds": ["001"], "expectedRecordCount": 120000 }]
     }
   },
   "records": []

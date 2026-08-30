@@ -1,6 +1,6 @@
-import type { Product, ProductImageMetadata, ProductProvenance, PriceObservation } from '../data.ts';
+import type { Product, ProductImageMetadata, ProductProvenance, PriceObservation, Promotion } from '../data.ts';
 import { readBoundedBody, runIngestion } from './core.ts';
-import type { DiscoveryInput, IngestionRunResult, NormalizedPrice, RetailerSourceAdapter, SourceMetadata } from './types.ts';
+import type { DiscoveryInput, IngestionRunResult, NormalizedPrice, NormalizedPromotion, RetailerSourceAdapter, SourceMetadata } from './types.ts';
 
 export type CatalogImportMode = 'full' | 'incremental';
 export type CatalogImageHealth = 'verified' | 'candidate' | 'missing' | 'failed';
@@ -28,6 +28,7 @@ export type CatalogProductRecord = {
   isWeighted: boolean;
   observedAt: string;
   source: SourceMetadata;
+  promotions: NormalizedPromotion[];
   image?: CatalogImageMetadata;
 };
 
@@ -48,6 +49,10 @@ export type CatalogImportOptions = {
   expectedRecords?: number;
   /** Reject a full refresh when it drops more than this fraction of the prior snapshot. */
   maxDropRatio?: number;
+  /** Promotions discovered alongside the price stream. */
+  promotions?: Iterable<NormalizedPromotion> | AsyncIterable<NormalizedPromotion>;
+  /** A source manifest is required before a result may claim complete coverage. */
+  manifest?: CatalogSourceManifest;
 };
 
 export type CatalogImportResult = {
@@ -62,6 +67,7 @@ export type CatalogImportResult = {
   warnings: string[];
   branchAvailability: CatalogBranchAvailability[];
   imageCoverage: { total: number; withUrl: number; candidate: number; missing: number };
+  promotions: NormalizedPromotion[];
 };
 
 export type CatalogSourceScope = {
@@ -75,6 +81,37 @@ export type CatalogSourceScope = {
   asOf?: string;
 };
 
+export type CatalogCoverageTarget = {
+  retailerId: string;
+  branchIds: string[];
+  expectedRecordCount: number;
+  expectedProductCount?: number;
+};
+
+/**
+ * Evidence supplied by the worker that makes a snapshot's completeness
+ * claim auditable. A public URL alone is not permission to redistribute a
+ * retailer's catalog, so the manifest must also identify the usage basis.
+ */
+export type CatalogSourceManifest = {
+  schemaVersion: '1';
+  sourceId: string;
+  sourceUri: string;
+  sourceVersion: string;
+  countryCode: 'IL';
+  asOf: string;
+  usage: {
+    kind: 'open-data' | 'permissioned';
+    termsUrl: string;
+  };
+  coverage: {
+    expectedRecordCount: number;
+    expectedProductCount: number;
+    expectedBranchCount: number;
+    retailers: CatalogCoverageTarget[];
+  };
+};
+
 export type CatalogSourceCompleteness = {
   dataset: 'configured-source' | 'adapter-feed' | 'empty';
   coverageStatus: 'configured-partial' | 'configured-complete-for-scope' | 'unavailable';
@@ -85,6 +122,11 @@ export type CatalogSourceCompleteness = {
   lastVerified: string | null;
   scope: CatalogSourceScope;
   limitations: string[];
+  manifest: {
+    declared: boolean;
+    valid: boolean;
+    errors: string[];
+  };
 };
 
 export type CatalogSourceLoadResult = {
@@ -125,13 +167,15 @@ function validTimestamp(value: string): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function productIdentity(record: Pick<NormalizedPrice, 'retailerId' | 'storeId' | 'barcode' | 'retailerItemId'>): string {
+function productIdentity(record: Pick<NormalizedPrice, 'retailerId' | 'storeId' | 'barcode' | 'retailerItemId'> & { isWeighted?: boolean }): string {
   const barcode = canonical(record.barcode);
-  const productKey = barcode ? `barcode:${barcode}` : `item:${canonical(record.retailerItemId)}`;
+  // Variable-weight labels can reuse a barcode while their PLU/item identity
+  // remains stable. Never merge such products solely by barcode.
+  const productKey = record.isWeighted ? `item:${canonical(record.retailerItemId)}` : barcode ? `barcode:${barcode}` : `item:${canonical(record.retailerItemId)}`;
   return `${canonical(record.retailerId)}:${canonical(record.storeId)}:${productKey}`;
 }
 
-function catalogIdentity(record: Pick<CatalogProductRecord, 'retailerId' | 'storeId' | 'barcode' | 'retailerItemId'>): string {
+function catalogIdentity(record: Pick<CatalogProductRecord, 'retailerId' | 'storeId' | 'barcode' | 'retailerItemId' | 'isWeighted'>): string {
   return productIdentity(record);
 }
 
@@ -208,6 +252,7 @@ function toCatalogRecord(record: NormalizedPrice): CatalogProductRecord {
     isWeighted: record.isWeighted === true,
     observedAt: new Date(record.observedAt).toISOString(),
     source,
+    promotions: [],
     image: normalizeImage(record.imageUrl, record.imageAlt ?? productName, source.sourceFileId, source.sourceUri),
   };
 }
@@ -246,6 +291,92 @@ function mergeIncremental(previous: readonly CatalogProductRecord[], candidate: 
   return sortRecords(merged.values());
 }
 
+function promotionIdentity(promotion: NormalizedPromotion): string {
+  const items = [...promotion.retailerItemIds].map(canonical).sort().join(',');
+  return `${canonical(promotion.retailerId)}:${canonical(promotion.storeId) || '*'}:${canonical(promotion.promotionId)}:${items}`;
+}
+
+function promotionTieBreak(promotion: NormalizedPromotion): string {
+  return JSON.stringify({
+    description: text(promotion.description) ?? '',
+    startsAt: promotion.startsAt ?? '',
+    endsAt: promotion.endsAt ?? '',
+    minimumQuantity: promotion.minimumQuantity ?? null,
+    discountNis: promotion.discountNis ?? null,
+    discountPercent: promotion.discountPercent ?? null,
+    promotionalPriceNis: promotion.promotionalPriceNis ?? null,
+    clubId: promotion.clubId ?? '',
+    isClubOnly: promotion.isClubOnly,
+    sourceFileId: promotion.source.sourceFileId,
+    checksum: promotion.source.checksum,
+  });
+}
+
+function validPromotion(promotion: NormalizedPromotion): boolean {
+  const start = promotion.startsAt ? validTimestamp(promotion.startsAt) : null;
+  const end = promotion.endsAt ? validTimestamp(promotion.endsAt) : null;
+  return Boolean(
+    promotion.retailerId.trim()
+      && promotion.promotionId.trim()
+      && promotion.description.trim()
+      && Array.isArray(promotion.retailerItemIds)
+      && promotion.retailerItemIds.length > 0
+      && promotion.source.sourceFileId.trim()
+      && promotion.source.sourceUri.trim()
+      && promotion.source.checksum.trim()
+      && (!promotion.startsAt || start !== null)
+      && (!promotion.endsAt || end !== null)
+      && (start === null || end === null || end >= start)
+      && (promotion.minimumQuantity === undefined || Number.isFinite(promotion.minimumQuantity) && promotion.minimumQuantity > 0)
+      && (promotion.discountNis === undefined || Number.isFinite(promotion.discountNis) && promotion.discountNis >= 0)
+      && (promotion.discountPercent === undefined || Number.isFinite(promotion.discountPercent) && promotion.discountPercent >= 0 && promotion.discountPercent <= 100)
+      && (promotion.promotionalPriceNis === undefined || Number.isFinite(promotion.promotionalPriceNis) && promotion.promotionalPriceNis >= 0),
+  );
+}
+
+async function collectPromotions(input: CatalogImportOptions['promotions']): Promise<{ promotions: NormalizedPromotion[]; skippedCount: number; warnings: string[] }> {
+  if (!input) return { promotions: [], skippedCount: 0, warnings: [] };
+  const candidates: NormalizedPromotion[] = [];
+  const warnings: string[] = [];
+  let skippedCount = 0;
+  const values = Symbol.asyncIterator in Object(input)
+    ? input as AsyncIterable<NormalizedPromotion>
+    : (async function* () { yield* input as Iterable<NormalizedPromotion>; })();
+  for await (const promotion of values) {
+    if (!validPromotion(promotion)) {
+      skippedCount += 1;
+      warnings.push('promotion row failed the catalog promotion contract');
+      continue;
+    }
+    candidates.push({
+      ...promotion,
+      retailerId: canonical(promotion.retailerId),
+      storeId: promotion.storeId ? canonical(promotion.storeId) : undefined,
+      promotionId: promotion.promotionId.trim(),
+      description: text(promotion.description)!,
+      retailerItemIds: [...new Set(promotion.retailerItemIds.map((item) => item.trim()).filter(Boolean))].sort(),
+    });
+  }
+  const deduped = new Map<string, NormalizedPromotion>();
+  for (const promotion of candidates) {
+    const key = promotionIdentity(promotion);
+    const existing = deduped.get(key);
+    const candidateEnd = validTimestamp(promotion.endsAt ?? '') ?? -Infinity;
+    const existingEnd = validTimestamp(existing?.endsAt ?? '') ?? -Infinity;
+    if (!existing || candidateEnd > existingEnd || candidateEnd === existingEnd && promotionTieBreak(promotion).localeCompare(promotionTieBreak(existing), 'en-US') > 0) deduped.set(key, promotion);
+  }
+  return { promotions: [...deduped.values()].sort((left, right) => promotionIdentity(left).localeCompare(promotionIdentity(right), 'en-US')), skippedCount, warnings };
+}
+
+function attachPromotions(records: readonly CatalogProductRecord[], promotions: readonly NormalizedPromotion[]): CatalogProductRecord[] {
+  return records.map((record) => ({
+    ...record,
+    promotions: promotions.filter((promotion) => promotion.retailerId === record.retailerId
+      && (!promotion.storeId || promotion.storeId === record.storeId)
+      && promotion.retailerItemIds.some((item) => canonical(item) === canonical(record.retailerItemId))),
+  }));
+}
+
 /**
  * Import a full or incremental price stream and apply an atomic publication
  * gate. Invalid rows, empty full feeds, unexpected row counts, and dangerous
@@ -272,6 +403,9 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
   }
   // Reconcile retailer-item and barcode aliases before choosing a winner, so
   // feeds that add a barcode later cannot create a second product row.
+  const promotionResult = await collectPromotions(options.promotions);
+  skippedCount += promotionResult.skippedCount;
+  warnings.push(...promotionResult.warnings);
   const parent = candidates.map((_, index) => index);
   const find = (index: number): number => {
     if (parent[index] !== index) parent[index] = find(parent[index]!);
@@ -285,7 +419,7 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
   candidates.forEach((record, index) => {
     const branch = `${canonical(record.retailerId)}:${canonical(record.storeId)}`;
     const aliases = [`${branch}:item:${canonical(record.retailerItemId)}`];
-    if (record.barcode) aliases.push(`${branch}:barcode:${canonical(record.barcode)}`);
+    if (record.barcode && !record.isWeighted) aliases.push(`${branch}:barcode:${canonical(record.barcode)}`);
     for (const alias of aliases) {
       const owner = aliasOwner.get(alias);
       if (owner !== undefined) union(owner, index); else aliasOwner.set(alias, index);
@@ -316,16 +450,22 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
   if (dropTooLarge) warnings.push('רענון מלא הושמט: ירידה חריגה במספר המוצרים לעומת snapshot תקין קודם');
   if (emptyIncrementalWithoutSnapshot) warnings.push('עדכון מדורג ריק ללא snapshot קודם אינו ניתן לפרסום');
   const publishedRecords = published ? (mode === 'incremental' ? mergeIncremental(previous, candidateRecords) : candidateRecords) : previous.length ? sortRecords(previous) : candidateRecords;
+  const existingPromotions = previous.flatMap((record) => record.promotions ?? []);
+  const publishedPromotions = published
+    ? [...new Map([...existingPromotions, ...promotionResult.promotions].map((promotion) => [promotionIdentity(promotion), promotion])).values()]
+    : existingPromotions;
+  const recordsWithPromotions = attachPromotions(publishedRecords, publishedPromotions);
   return {
     candidateRecords,
-    records: publishedRecords,
+    records: recordsWithPromotions,
     mode,
     published,
     duplicateCount,
     skippedCount,
     warnings,
-    branchAvailability: availability(publishedRecords),
-    imageCoverage: imageCoverage(publishedRecords),
+    branchAvailability: availability(recordsWithPromotions),
+    imageCoverage: imageCoverage(recordsWithPromotions),
+    promotions: publishedPromotions,
   };
 }
 
@@ -337,31 +477,34 @@ function sourceDocumentKind(value: unknown): SourceMetadata['documentKind'] {
   return value === 'price_incremental' ? 'price_incremental' : 'price_full';
 }
 
-function externalSourceMetadata(raw: Record<string, unknown>, root: Record<string, unknown>, retailerId: string, index: number, now: string): SourceMetadata {
+function externalSourceMetadata(raw: Record<string, unknown>, root: Record<string, unknown>, retailerId: string): SourceMetadata | null {
   const source = objectRecord(raw.source) ?? objectRecord(root.source);
-  const observedAt = typeof raw.observedAt === 'string' ? raw.observedAt : typeof root.observedAt === 'string' ? root.observedAt : now;
   const sourceFileId = typeof source?.sourceFileId === 'string' && source.sourceFileId.trim()
     ? source.sourceFileId.trim()
-    : typeof raw.sourceFileId === 'string' && raw.sourceFileId.trim() ? raw.sourceFileId.trim() : `configured-catalog-${index + 1}`;
+    : typeof raw.sourceFileId === 'string' && raw.sourceFileId.trim() ? raw.sourceFileId.trim() : '';
   const sourceUri = typeof source?.sourceUri === 'string' && source.sourceUri.trim()
     ? source.sourceUri.trim()
-    : typeof raw.sourceUri === 'string' && raw.sourceUri.trim() ? raw.sourceUri.trim() : 'configured://catalog';
-  const downloadedAt = typeof source?.downloadedAt === 'string' ? source.downloadedAt : now;
-  const publishedAt = typeof source?.publishedAt === 'string' ? source.publishedAt : observedAt;
+    : typeof raw.sourceUri === 'string' && raw.sourceUri.trim() ? raw.sourceUri.trim() : '';
+  const adapterId = typeof source?.adapterId === 'string' && source.adapterId.trim() ? source.adapterId.trim() : typeof raw.adapterId === 'string' ? raw.adapterId.trim() : '';
+  const fileName = typeof source?.fileName === 'string' && source.fileName.trim() ? source.fileName.trim() : typeof raw.fileName === 'string' ? raw.fileName.trim() : '';
+  const downloadedAt = typeof source?.downloadedAt === 'string' ? source.downloadedAt : typeof raw.downloadedAt === 'string' ? raw.downloadedAt : '';
+  const publishedAt = typeof source?.publishedAt === 'string' ? source.publishedAt : typeof raw.publishedAt === 'string' ? raw.publishedAt : undefined;
+  const checksum = typeof source?.checksum === 'string' && source.checksum.trim() ? source.checksum.trim() : typeof raw.checksum === 'string' ? raw.checksum.trim() : '';
+  if (!sourceFileId || !sourceUri || !adapterId || !fileName || !checksum || !downloadedAt || validTimestamp(downloadedAt) === null || publishedAt && validTimestamp(publishedAt) === null) return null;
   return {
     retailerId: typeof source?.retailerId === 'string' ? source.retailerId : retailerId,
-    adapterId: typeof source?.adapterId === 'string' && source.adapterId.trim() ? source.adapterId : 'configured-catalog',
+    adapterId,
     sourceFileId,
     sourceUri,
-    fileName: typeof source?.fileName === 'string' && source.fileName.trim() ? source.fileName : 'catalog.json',
+    fileName,
     documentKind: sourceDocumentKind(source?.documentKind),
     publishedAt,
     downloadedAt,
-    checksum: typeof source?.checksum === 'string' && source.checksum.trim() ? source.checksum : 'configured-source',
+    checksum,
   };
 }
 
-function externalPriceRecord(raw: unknown, root: Record<string, unknown>, index: number, now: string): NormalizedPrice | null {
+function externalPriceRecord(raw: unknown, root: Record<string, unknown>): NormalizedPrice | null {
   const value = objectRecord(raw);
   if (!value) return null;
   const retailerId = typeof value.retailerId === 'string' ? value.retailerId.trim() : typeof value.retailer === 'string' ? value.retailer.trim() : typeof root.retailerId === 'string' ? root.retailerId.trim() : '';
@@ -369,11 +512,12 @@ function externalPriceRecord(raw: unknown, root: Record<string, unknown>, index:
   const retailerItemId = typeof value.retailerItemId === 'string' ? value.retailerItemId.trim() : typeof value.itemId === 'string' ? value.itemId.trim() : typeof value.sku === 'string' ? value.sku.trim() : '';
   const rawPrice = value.priceNis ?? value.price;
   const priceNis = rawPrice === null ? null : typeof rawPrice === 'number' && Number.isFinite(rawPrice) ? rawPrice : typeof rawPrice === 'string' && rawPrice.trim() && Number.isFinite(Number(rawPrice)) ? Number(rawPrice) : Number.NaN;
-  const observedAt = typeof value.observedAt === 'string' ? value.observedAt : typeof root.observedAt === 'string' ? root.observedAt : now;
-  if (!retailerId || !storeId || !retailerItemId || (Number.isNaN(priceNis) && value.isAvailable !== false)) return null;
+  const observedAt = typeof value.observedAt === 'string' ? value.observedAt : typeof root.observedAt === 'string' ? root.observedAt : '';
+  if (!retailerId || !storeId || !retailerItemId || !observedAt || (Number.isNaN(priceNis) && value.isAvailable !== false)) return null;
   if (priceNis !== null && (!Number.isFinite(priceNis) || priceNis < 0)) return null;
   if (!observedAt || validTimestamp(observedAt) === null) return null;
-  const source = externalSourceMetadata(value, root, retailerId, index, now);
+  const source = externalSourceMetadata(value, root, retailerId);
+  if (!source) return null;
   return {
     retailerId,
     storeId,
@@ -397,29 +541,76 @@ function externalPriceRecord(raw: unknown, root: Record<string, unknown>, index:
   };
 }
 
-function externalCatalogRecords(payload: unknown): { root: Record<string, unknown>; records: unknown[] } {
-  if (Array.isArray(payload)) return { root: {}, records: payload };
+function externalCatalogRecords(payload: unknown): { root: Record<string, unknown>; records: unknown[]; promotions: unknown[] } {
+  if (Array.isArray(payload)) return { root: {}, records: payload, promotions: [] };
   const root = objectRecord(payload) ?? {};
-  for (const key of ['records', 'prices', 'products']) if (Array.isArray(root[key])) return { root, records: root[key] as unknown[] };
+  for (const key of ['records', 'prices', 'products']) if (Array.isArray(root[key])) return { root, records: root[key] as unknown[], promotions: Array.isArray(root.promotions) ? root.promotions : [] };
   const nested = objectRecord(root.result);
-  if (nested) for (const key of ['records', 'prices', 'products']) if (Array.isArray(nested[key])) return { root: { ...root, ...nested }, records: nested[key] as unknown[] };
-  return { root, records: [] };
+  if (nested) for (const key of ['records', 'prices', 'products']) if (Array.isArray(nested[key])) return { root: { ...root, ...nested }, records: nested[key] as unknown[], promotions: Array.isArray(nested.promotions) ? nested.promotions : Array.isArray(root.promotions) ? root.promotions : [] };
+  return { root, records: [], promotions: [] };
+}
+
+function externalPromotionRecord(raw: unknown, root: Record<string, unknown>): NormalizedPromotion | null {
+  const value = objectRecord(raw);
+  if (!value) return null;
+  const retailerId = typeof value.retailerId === 'string' ? value.retailerId.trim() : typeof value.retailer === 'string' ? value.retailer.trim() : typeof root.retailerId === 'string' ? root.retailerId.trim() : '';
+  const storeId = typeof value.storeId === 'string' ? value.storeId.trim() : typeof value.branchId === 'string' ? value.branchId.trim() : undefined;
+  const promotionId = typeof value.promotionId === 'string' ? value.promotionId.trim() : typeof value.promoId === 'string' ? value.promoId.trim() : typeof value.id === 'string' ? value.id.trim() : '';
+  const description = typeof value.description === 'string' ? value.description.trim() : typeof value.label === 'string' ? value.label.trim() : '';
+  const rawItems = value.retailerItemIds ?? value.itemIds ?? value.items ?? (typeof value.retailerItemId === 'string' ? [value.retailerItemId] : undefined);
+  const retailerItemIds = Array.isArray(rawItems) ? rawItems.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [];
+  const source = externalSourceMetadata(value, root, retailerId);
+  if (!source || !retailerId || !promotionId || !description || !retailerItemIds.length) return null;
+  const numberValue = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : typeof candidate === 'string' && candidate.trim() && Number.isFinite(Number(candidate)) ? Number(candidate) : undefined;
+  const startsAt = typeof value.startsAt === 'string' ? value.startsAt : typeof value.validFrom === 'string' ? value.validFrom : undefined;
+  const endsAt = typeof value.endsAt === 'string' ? value.endsAt : typeof value.validUntil === 'string' ? value.validUntil : undefined;
+  const clubId = typeof value.clubId === 'string' ? value.clubId.trim() || undefined : undefined;
+  return {
+    retailerId,
+    storeId,
+    promotionId,
+    description,
+    startsAt,
+    endsAt,
+    minimumQuantity: numberValue(value.minimumQuantity ?? value.minQuantity),
+    discountNis: numberValue(value.discountNis ?? value.discount),
+    discountPercent: numberValue(value.discountPercent ?? value.discountPercentage),
+    promotionalPriceNis: numberValue(value.promotionalPriceNis ?? value.promotionalPrice ?? value.salePrice),
+    clubId,
+    isClubOnly: value.isClubOnly === true || Boolean(clubId),
+    retailerItemIds,
+    source,
+  };
+}
+
+function externalNestedPromotions(rawRecords: readonly unknown[]): unknown[] {
+  return rawRecords.flatMap((raw) => {
+    const record = objectRecord(raw);
+    return record && Array.isArray(record.promotions) ? record.promotions : [];
+  });
 }
 
 function catalogScope(payload: Record<string, unknown>): CatalogSourceScope {
   const completeness = objectRecord(payload.completeness) ?? payload;
+  const manifest = objectRecord(payload.manifest) ?? objectRecord(completeness.manifest);
   const scope = objectRecord(completeness.scope) ?? objectRecord(payload.scope) ?? {};
+  const coverage = objectRecord(manifest?.coverage);
+  const sourceVersion = typeof manifest?.sourceVersion === 'string' ? manifest.sourceVersion : undefined;
+  const asOf = typeof manifest?.asOf === 'string' ? manifest.asOf : undefined;
+  const expectedRetailers = Array.isArray(coverage?.retailers)
+    ? (coverage.retailers as unknown[]).map((item) => objectRecord(item)?.retailerId).filter((item): item is string => typeof item === 'string')
+    : undefined;
   const integer = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()).sort() : undefined;
   return {
-    id: typeof scope.id === 'string' && scope.id.trim() ? scope.id.trim() : 'configured-catalog',
-    countryCode: typeof scope.countryCode === 'string' ? scope.countryCode.trim().toUpperCase() : '',
-    expectedRecordCount: integer(scope.expectedRecordCount ?? scope.expectedRecords),
-    expectedProductCount: integer(scope.expectedProductCount),
-    expectedBranchCount: integer(scope.expectedBranchCount),
-    expectedRetailers: strings(scope.expectedRetailers ?? scope.expectedChains),
-    sourceVersion: typeof scope.sourceVersion === 'string' ? scope.sourceVersion : typeof scope.version === 'string' ? scope.version : undefined,
-    asOf: typeof scope.asOf === 'string' ? scope.asOf : typeof scope.lastVerified === 'string' ? scope.lastVerified : undefined,
+    id: typeof manifest?.sourceId === 'string' && manifest.sourceId.trim() ? manifest.sourceId.trim() : typeof scope.id === 'string' && scope.id.trim() ? scope.id.trim() : 'configured-catalog',
+    countryCode: typeof manifest?.countryCode === 'string' ? manifest.countryCode.trim().toUpperCase() : typeof scope.countryCode === 'string' ? scope.countryCode.trim().toUpperCase() : '',
+    expectedRecordCount: integer(coverage?.expectedRecordCount ?? scope.expectedRecordCount ?? scope.expectedRecords),
+    expectedProductCount: integer(coverage?.expectedProductCount ?? scope.expectedProductCount),
+    expectedBranchCount: integer(coverage?.expectedBranchCount ?? scope.expectedBranchCount),
+    expectedRetailers: strings(expectedRetailers ?? scope.expectedRetailers ?? scope.expectedChains),
+    sourceVersion: sourceVersion ?? (typeof scope.sourceVersion === 'string' ? scope.sourceVersion : typeof scope.version === 'string' ? scope.version : undefined),
+    asOf: asOf ?? (typeof scope.asOf === 'string' ? scope.asOf : typeof scope.lastVerified === 'string' ? scope.lastVerified : undefined),
   };
 }
 
@@ -427,7 +618,7 @@ function catalogProductCount(records: readonly CatalogProductRecord[]) {
   return new Set(records.map((record) => catalogProductIdentity(record))).size;
 }
 
-function catalogCompletenessFor(records: readonly CatalogProductRecord[], dataset: CatalogSourceCompleteness['dataset'], scope: CatalogSourceScope, lastVerified: string | null, complete: boolean, limitations: string[]): CatalogSourceCompleteness {
+function catalogCompletenessFor(records: readonly CatalogProductRecord[], dataset: CatalogSourceCompleteness['dataset'], scope: CatalogSourceScope, lastVerified: string | null, complete: boolean, limitations: string[], manifest = { declared: false, valid: false, errors: [] as string[] }): CatalogSourceCompleteness {
   return {
     dataset,
     coverageStatus: complete ? 'configured-complete-for-scope' : records.length ? 'configured-partial' : 'unavailable',
@@ -438,6 +629,71 @@ function catalogCompletenessFor(records: readonly CatalogProductRecord[], datase
     lastVerified,
     scope,
     limitations,
+    manifest,
+  };
+}
+
+function requiredUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
+}
+
+/** Parse and validate the evidence manifest; invalid manifests are never coerced into complete coverage. */
+export function validateCatalogSourceManifest(value: unknown): { manifest: CatalogSourceManifest | null; errors: string[] } {
+  const root = objectRecord(value);
+  const coverage = objectRecord(root?.coverage);
+  const usage = objectRecord(root?.usage);
+  const errors: string[] = [];
+  const integer = (candidate: unknown, name: string, required = true): number | undefined => {
+    if (candidate === undefined && !required) return undefined;
+    if (typeof candidate !== 'number' || !Number.isSafeInteger(candidate) || candidate < 0) errors.push(`${name} must be a non-negative safe integer`);
+    return typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : undefined;
+  };
+  const stringValue = (candidate: unknown, name: string): string => {
+    if (typeof candidate !== 'string' || !candidate.trim()) { errors.push(`${name} is required`); return ''; }
+    return candidate.trim();
+  };
+  const sourceId = stringValue(root?.sourceId, 'manifest.sourceId');
+  const sourceUri = stringValue(root?.sourceUri, 'manifest.sourceUri');
+  const sourceVersion = stringValue(root?.sourceVersion, 'manifest.sourceVersion');
+  const countryCode = stringValue(root?.countryCode, 'manifest.countryCode').toUpperCase();
+  const asOf = stringValue(root?.asOf, 'manifest.asOf');
+  if (countryCode !== 'IL') errors.push('manifest.countryCode must be IL');
+  if (asOf && validTimestamp(asOf) === null) errors.push('manifest.asOf must be an ISO timestamp');
+  if (!requiredUrl(sourceUri)) errors.push('manifest.sourceUri must be an absolute HTTP(S) URL');
+  const usageKind = usage?.kind;
+  if (usageKind !== 'open-data' && usageKind !== 'permissioned') errors.push('manifest.usage.kind must be open-data or permissioned');
+  const termsUrl = stringValue(usage?.termsUrl, 'manifest.usage.termsUrl');
+  if (termsUrl && !requiredUrl(termsUrl)) errors.push('manifest.usage.termsUrl must be an absolute HTTP(S) URL');
+  if (root?.schemaVersion !== '1') errors.push('manifest.schemaVersion must be 1');
+  const expectedRecordCount = integer(coverage?.expectedRecordCount, 'manifest.coverage.expectedRecordCount');
+  const expectedProductCount = integer(coverage?.expectedProductCount, 'manifest.coverage.expectedProductCount');
+  const expectedBranchCount = integer(coverage?.expectedBranchCount, 'manifest.coverage.expectedBranchCount');
+  const rawRetailers = Array.isArray(coverage?.retailers) ? coverage.retailers : [];
+  if (!Array.isArray(coverage?.retailers) || rawRetailers.length === 0) errors.push('manifest.coverage.retailers must be a non-empty array');
+  const retailers: CatalogCoverageTarget[] = [];
+  const retailerIds = new Set<string>();
+  for (const [index, raw] of rawRetailers.entries()) {
+    const item = objectRecord(raw);
+    const retailerId = stringValue(item?.retailerId, `manifest.coverage.retailers[${index}].retailerId`).toLowerCase();
+    const branchIds = Array.isArray(item?.branchIds) ? item.branchIds.filter((branch): branch is string => typeof branch === 'string' && Boolean(branch.trim())).map((branch) => branch.trim()).sort() : [];
+    if (!branchIds.length) errors.push(`manifest.coverage.retailers[${index}].branchIds must be non-empty`);
+    if (new Set(branchIds).size !== branchIds.length) errors.push(`manifest.coverage.retailers[${index}].branchIds must be unique`);
+    const recordCount = integer(item?.expectedRecordCount, `manifest.coverage.retailers[${index}].expectedRecordCount`);
+    const productCount = integer(item?.expectedProductCount, `manifest.coverage.retailers[${index}].expectedProductCount`, false);
+    if (retailerIds.has(retailerId)) errors.push(`manifest.coverage.retailers contains duplicate retailer ${retailerId}`); else retailerIds.add(retailerId);
+    if (retailerId && recordCount !== undefined) retailers.push({ retailerId, branchIds, expectedRecordCount: recordCount, expectedProductCount: productCount });
+  }
+  if (expectedBranchCount !== undefined && expectedBranchCount !== new Set(retailers.flatMap((retailer) => retailer.branchIds.map((branch) => `${retailer.retailerId}:${branch}`))).size) errors.push('manifest expectedBranchCount does not match retailer branch targets');
+  if (expectedRecordCount !== undefined && expectedRecordCount !== retailers.reduce((total, retailer) => total + retailer.expectedRecordCount, 0)) errors.push('manifest expectedRecordCount does not match retailer targets');
+  if (errors.length) return { manifest: null, errors };
+  return {
+    manifest: {
+      schemaVersion: '1', sourceId, sourceUri, sourceVersion, countryCode: 'IL', asOf,
+      usage: { kind: usageKind as 'open-data' | 'permissioned', termsUrl },
+      coverage: { expectedRecordCount: expectedRecordCount!, expectedProductCount: expectedProductCount!, expectedBranchCount: expectedBranchCount!, retailers },
+    },
+    errors: [],
   };
 }
 
@@ -445,18 +701,36 @@ function configuredCatalogCompleteness(payload: Record<string, unknown>, records
   const scope = catalogScope(payload);
   const completeness = objectRecord(payload.completeness) ?? payload;
   const declaredComplete = payload.complete === true || completeness.complete === true || completeness.coverageStatus === 'complete';
+  const rawManifest = objectRecord(payload.manifest) ?? objectRecord(completeness.manifest);
+  const manifestResult = validateCatalogSourceManifest(rawManifest);
   const retailers = [...new Set(records.map((record) => record.retailerId))].sort();
-  const expectedRetailers = scope.expectedRetailers ?? [];
+  const branchKeys = new Set(records.map((record) => `${record.retailerId}:${record.storeId}`));
   const validAsOf = Boolean(scope.asOf && validTimestamp(scope.asOf) !== null);
+  const manifestCountsMatch = Boolean(manifestResult.manifest)
+    && manifestResult.manifest!.coverage.expectedRecordCount === records.length
+    && manifestResult.manifest!.coverage.expectedProductCount === catalogProductCount(records)
+    && manifestResult.manifest!.coverage.expectedBranchCount === branchKeys.size
+    && manifestResult.manifest!.coverage.retailers.every((target) => {
+      const targetBranches = new Set(target.branchIds.map((branch) => `${target.retailerId}:${branch}`));
+      const targetRecords = records.filter((record) => record.retailerId === target.retailerId);
+      return targetRecords.length === target.expectedRecordCount
+        && targetBranches.size === new Set(targetRecords.map((record) => `${record.retailerId}:${record.storeId}`)).size
+        && [...targetBranches].every((branch) => branchKeys.has(branch))
+        && (target.expectedProductCount === undefined || target.expectedProductCount === new Set(targetRecords.map(catalogProductIdentity)).size);
+    })
+    && manifestResult.manifest!.coverage.retailers.length === retailers.length
+    && manifestResult.manifest!.coverage.retailers.every((target) => retailers.includes(target.retailerId));
   const complete = declaredComplete
     && scope.countryCode === 'IL'
     && Boolean(scope.id && scope.sourceVersion && validAsOf)
-    && scope.expectedRecordCount === records.length
-    && (scope.expectedProductCount === undefined || scope.expectedProductCount === catalogProductCount(records))
-    && (scope.expectedBranchCount === undefined || scope.expectedBranchCount === new Set(records.map((record) => `${record.retailerId}:${record.storeId}`)).size)
-    && (expectedRetailers.length === 0 || expectedRetailers.length === retailers.length && expectedRetailers.every((retailer) => retailers.includes(retailer)));
-  const limitations = complete ? [] : ['המקור חייב להצהיר על scope מלא בישראל, גרסה, תאריך asOf, מספר רשומות ייחודי ומספר סניפים/רשתות כאשר הם נדרשים; אחרת הוא מסומן חלקי.'];
-  return catalogCompletenessFor(records, 'configured-source', scope, scope.asOf ?? (records.map((record) => record.observedAt).sort().at(-1) ?? null), complete, limitations);
+    && Boolean(manifestResult.manifest)
+    && manifestCountsMatch;
+  const limitations = complete ? [] : [
+    ...(rawManifest ? manifestResult.errors : ['no source manifest was supplied']),
+    ...(rawManifest && manifestResult.manifest && !manifestCountsMatch ? ['manifest counts or retailer/branch targets do not match the normalized records'] : []),
+    'complete status requires operator-confirmed open-data or written permission; a public URL alone is not sufficient',
+  ];
+  return catalogCompletenessFor(records, 'configured-source', scope, scope.asOf ?? (records.map((record) => record.observedAt).sort().at(-1) ?? null), complete, limitations, { declared: Boolean(rawManifest), valid: Boolean(manifestResult.manifest), errors: manifestResult.errors });
 }
 
 function emptyCatalogSourceResult(warnings: string[] = []): CatalogSourceLoadResult {
@@ -475,7 +749,6 @@ async function fetchConfiguredCatalog(endpoint: string, options: CatalogSourceLo
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxBytes = options.maxBytes ?? catalogSourceDefaultMaxBytes;
   const timeoutMs = options.timeoutMs ?? catalogSourceDefaultTimeoutMs;
-  const now = new Date().toISOString();
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -484,18 +757,23 @@ async function fetchConfiguredCatalog(endpoint: string, options: CatalogSourceLo
       if (!response.ok) throw new Error(`catalog source returned HTTP ${response.status}`);
       const body = await readBoundedBody(response, maxBytes);
       const payload = JSON.parse(new TextDecoder().decode(body)) as unknown;
-      const { root, records: rawRecords } = externalCatalogRecords(payload);
+      const { root, records: rawRecords, promotions: rootPromotions } = externalCatalogRecords(payload);
       if (!rawRecords.length) throw new Error('catalog source returned no records');
-      const normalized = rawRecords.map((raw, index) => externalPriceRecord(raw, root, index, now));
+      const normalized = rawRecords.map((raw) => externalPriceRecord(raw, root));
       const invalidCount = normalized.filter((record): record is null => record === null).length;
       const records = normalized.filter((record): record is NormalizedPrice => Boolean(record));
+      const rawPromotions = [...rootPromotions, ...externalNestedPromotions(rawRecords)];
+      const normalizedPromotions = rawPromotions.map((raw) => externalPromotionRecord(raw, root));
+      const invalidPromotionCount = normalizedPromotions.filter((promotion) => promotion === null).length;
+      const promotions = normalizedPromotions.filter((promotion): promotion is NormalizedPromotion => Boolean(promotion));
       const scope = catalogScope(root);
       const imported = await importCatalogPrices((async function* () { yield* records; })(), {
         mode: 'full',
         previous: options.previous,
         expectedRecords: scope.expectedRecordCount,
+        promotions,
       });
-      if (invalidCount || !catalogImportIsSafe(imported)) throw new Error(`catalog source failed validation (${invalidCount} malformed rows)`);
+      if (invalidCount || invalidPromotionCount || !catalogImportIsSafe(imported)) throw new Error(`catalog source failed validation (${invalidCount} malformed price rows, ${invalidPromotionCount} malformed promotion rows)`);
       const completeness = configuredCatalogCompleteness(root, imported.records);
       const result: CatalogSourceLoadResult = { records: imported.records, products: materializeCatalogProducts(imported.records), completeness, warnings: imported.warnings, fallbackUsed: false };
       catalogSourceLastValid.set(endpoint, result);
@@ -545,15 +823,31 @@ export async function importCatalogFromAdapter(adapter: RetailerSourceAdapter, i
     documentKinds: input.documentKinds?.filter((kind) => kind === 'price_full' || kind === 'price_incremental') ?? ['price_full'],
   };
   const records: NormalizedPrice[] = [];
+  const adapterPromotions: NormalizedPromotion[] = [];
   const ingestion = await runIngestion(adapter, normalizedInput, {
     async upsertPrices(stream) { for await (const record of stream) records.push(record); return records.length; },
+    async upsertPromotions(stream) { for await (const promotion of stream) adapterPromotions.push(promotion); return adapterPromotions.length; },
   });
   const onlyIncremental = normalizedInput.documentKinds?.length && normalizedInput.documentKinds.every((kind) => kind === 'price_incremental');
-  const imported = await importCatalogPrices((async function* () { yield* records; })(), { ...options, mode: options.mode ?? (onlyIncremental ? 'incremental' : 'full') });
+  const allPromotions = (async function* () {
+    if (options.promotions) for await (const promotion of options.promotions) yield promotion;
+    yield* adapterPromotions;
+  })();
+  const imported = await importCatalogPrices((async function* () { yield* records; })(), { ...options, promotions: allPromotions, mode: options.mode ?? (onlyIncremental ? 'incremental' : 'full') });
   const published = ingestion.status === 'completed' && imported.published;
   const safeRecords = published ? imported.records : options.previous ? [...options.previous] : imported.records;
   const warnings = [...imported.warnings, ...ingestion.warnings, ...ingestion.failures.map((failure) => `${failure.code}: ${failure.message}`)];
   const sourceScope: CatalogSourceScope = { id: `${adapter.retailerId}-adapter-feed`, countryCode: 'IL', sourceVersion: normalizedInput.runKey, asOf: imported.records.map((record) => record.observedAt).sort().at(-1) };
+  if (options.manifest) {
+    return {
+      records: safeRecords,
+      products: materializeCatalogProducts(safeRecords),
+      completeness: configuredCatalogCompleteness({ complete: true, manifest: options.manifest }, safeRecords),
+      warnings,
+      fallbackUsed: !published,
+      ingestion: { ...ingestion },
+    };
+  }
   return { records: safeRecords, products: materializeCatalogProducts(safeRecords), completeness: catalogCompletenessFor(safeRecords, 'adapter-feed', sourceScope, sourceScope.asOf ?? null, false, published ? ['הזנת adapter הושלמה, אך לא צורף להצהיר scope מלא ולכן היא אינה מסומנת ככיסוי ארצי מלא.'] : ['הייבוא לא הושלם במלואו; ה-snapshot הקודם נשמר ולא סומן ככיסוי מלא.']), warnings, fallbackUsed: !published, ingestion: { ...ingestion }, };
 }
 
@@ -561,8 +855,8 @@ export function catalogImportIsSafe(result: CatalogImportResult, minimumRecords 
   return result.published && result.candidateRecords.length >= minimumRecords && result.skippedCount === 0;
 }
 
-export function catalogProductIdentity(record: Pick<CatalogProductRecord, 'retailerId' | 'retailerItemId' | 'barcode'>): string {
-  return record.barcode ? `${canonical(record.retailerId)}:barcode:${canonical(record.barcode)}` : `${canonical(record.retailerId)}:item:${canonical(record.retailerItemId)}`;
+export function catalogProductIdentity(record: Pick<CatalogProductRecord, 'retailerId' | 'retailerItemId' | 'barcode'> & { isWeighted?: boolean }): string {
+  return productIdentity({ ...record, storeId: '', isWeighted: record.isWeighted });
 }
 
 function chooseProductMetadata(records: readonly CatalogProductRecord[]): CatalogProductRecord {
@@ -583,6 +877,24 @@ function priceObservation(record: CatalogProductRecord): PriceObservation {
     updatedAt: record.observedAt,
     available: record.isAvailable,
     source: `${record.source.adapterId} · ${record.source.sourceFileId}`,
+  };
+}
+
+function productPromotion(promotion: NormalizedPromotion): Promotion {
+  const details = [
+    promotion.discountPercent !== undefined ? `${promotion.discountPercent}%` : undefined,
+    promotion.discountNis !== undefined ? `${promotion.discountNis.toFixed(2)} NIS` : undefined,
+    promotion.clubId ? `club ${promotion.clubId}` : undefined,
+  ].filter(Boolean).join(' · ');
+  return {
+    id: promotion.promotionId,
+    kind: promotion.isClubOnly ? 'club' : 'public',
+    label: promotion.description,
+    minimumQuantity: promotion.minimumQuantity,
+    offerPrice: promotion.isClubOnly ? undefined : promotion.promotionalPriceNis,
+    clubPrice: promotion.isClubOnly ? promotion.promotionalPriceNis : undefined,
+    validUntil: promotion.endsAt ?? '9999-12-31T23:59:59.999Z',
+    explanation: details ? `${promotion.description} (${details})` : promotion.description,
   };
 }
 
@@ -609,6 +921,10 @@ export function materializeCatalogProducts(records: readonly CatalogProductRecor
     }
     const image = metadata.image ?? { status: 'missing' as const, alt: metadata.productName ?? 'מוצר', fallbackLabel: 'תמונת מוצר אינה זמינה' };
     const provenance: ProductProvenance = { sourceFileIds: [...sourceFileIds].sort(), sourceUris: [...new Set(group.map((record) => record.source.sourceUri))].sort(), lastObservedAt: metadata.observedAt };
+    // Product.promotions is branch-agnostic. Branch-scoped promotions remain
+    // attached to CatalogProductRecord and are not leaked to other branches.
+    const promotions = [...new Map(group.flatMap((record) => record.promotions ?? []).filter((promotion) => !promotion.storeId).map((promotion) => [promotionIdentity(promotion), promotion])).values()]
+      .map(productPromotion);
     return {
       id: identity.replace(/[^a-z0-9:_-]+/gi, '-'),
       barcode: metadata.barcode ?? metadata.retailerItemId,
@@ -625,7 +941,7 @@ export function materializeCatalogProducts(records: readonly CatalogProductRecor
       branchAvailability,
       provenance,
       prices,
-      promotions: [],
+      promotions,
     } satisfies Product;
   });
 }
