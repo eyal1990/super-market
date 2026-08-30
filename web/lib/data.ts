@@ -4,7 +4,7 @@ export type Store = {
   chain: string;
   name: string;
   address: string;
-  distanceKm: number;
+  distanceKm: number | null;
   color: 'mint' | 'blue' | 'yellow';
   coordinates: { lat: number; lon: number };
   openNow: boolean | null;
@@ -111,7 +111,7 @@ export const products: Product[] = [
 ];
 
 export const money = (value: number) => `${value.toFixed(2)} ₪`;
-export const formatDistance = (km: number) => km < 1 ? `${Math.round(km * 1000)} מ׳` : `${km.toFixed(1)} ק״מ`;
+export const formatDistance = (km: number | null) => km === null ? 'מרחק לא חושב' : km < 1 ? `${Math.round(km * 1000)} מ׳` : `${km.toFixed(1)} ק״מ`;
 const round = (value: number) => Number(value.toFixed(2));
 
 export function normalizeSearch(value: string) {

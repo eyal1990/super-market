@@ -100,7 +100,8 @@ export function buildDeliveryHandoff(items: Basket, storeId: string, now = new D
     const price = getPrice(product, store.id);
     handoffItems.push({ productId, barcode: product.barcode, name: product.name, size: product.size, quantity, price: { amount: price.amount, available: price.available, updatedAt: price.updatedAt, source: price.source } });
     if (!price.available || price.amount === null) warnings.push(`${product.name}: אין מחיר זמין בסניף שנבחר`);
-    if (price.updatedAt && now.getTime() - new Date(price.updatedAt).getTime() > 24 * 60 * 60 * 1000) warnings.push(`${product.name}: המחיר ישן מ-24 שעות`);
+    if (price.updatedAt && !Number.isFinite(new Date(price.updatedAt).getTime())) warnings.push(`${product.name}: מועד בדיקת המחיר אינו תקין`);
+    else if (price.updatedAt && now.getTime() - new Date(price.updatedAt).getTime() > 24 * 60 * 60 * 1000) warnings.push(`${product.name}: המחיר ישן מ-24 שעות`);
     if (product.promotions.some((promotion) => promotion.kind === 'club')) warnings.push(`${product.name}: מחיר מועדון אינו כלול בהעברה`);
   }
   if (!handoffItems.length) return null;

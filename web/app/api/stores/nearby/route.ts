@@ -8,7 +8,9 @@ export async function GET(request: Request) {
   const limited = rateLimit(request, 'nearby-stores'); if (limited) return limited;
   const url = new URL(request.url); const lat = Number(url.searchParams.get('lat')); const lon = Number(url.searchParams.get('lon'));
   const radius = Number(url.searchParams.get('radius') ?? 10);
-  const mode = url.searchParams.get('mode') === 'delivery' ? 'delivery' : 'physical';
+  const requestedMode = url.searchParams.get('mode');
+  if (requestedMode && requestedMode !== 'physical' && requestedMode !== 'delivery') return NextResponse.json({ error: 'מצב קנייה לא תקין' }, { status: 400 });
+  const mode = requestedMode === 'delivery' ? 'delivery' : 'physical';
   if (!isIsraeliCoordinate(lat, lon) || !Number.isFinite(radius) || radius <= 0 || radius > 100) return NextResponse.json({ error: 'מיקום או רדיוס לא תקינים' }, { status: 400 });
   const directory = await loadStoreDirectory();
   const nearby = rankNearbyStores(storesFromDirectory(stores, directory.entries), lat, lon, radius, mode);

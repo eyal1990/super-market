@@ -5,7 +5,9 @@ export const israelCoordinateBounds = { minLat: 29.45, maxLat: 33.35, minLon: 34
 export function isIsraeliCoordinate(lat: number, lon: number) {
   return Number.isFinite(lat) && Number.isFinite(lon)
     && lat >= israelCoordinateBounds.minLat && lat <= israelCoordinateBounds.maxLat
-    && lon >= israelCoordinateBounds.minLon && lon <= israelCoordinateBounds.maxLon;
+    && lon >= israelCoordinateBounds.minLon && lon <= israelCoordinateBounds.maxLon
+    // Keep clearly Jordan-side coordinates out of the coarse bounding box.
+    && !(lat < 32 && lon > 35.65);
 }
 
 export function distanceKm(aLat: number, aLon: number, bLat: number, bLon: number) {

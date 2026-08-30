@@ -22,4 +22,5 @@ test('nearby coordinates must be inside Israel bounds', () => {
   assert.equal(isIsraeliCoordinate(32.08, 34.78), true);
   assert.equal(isIsraeliCoordinate(0, 0), false);
   assert.equal(isIsraeliCoordinate(51.5, -0.1), false);
+  assert.equal(isIsraeliCoordinate(31.5, 35.9), false);
 });

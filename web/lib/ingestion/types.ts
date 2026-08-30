@@ -80,6 +80,7 @@ export interface NormalizedStore {
   isActive?: boolean;
   openNow?: boolean | null;
   deliveryCapability?: 'deep_link' | 'partial' | 'manual' | 'unsupported';
+  retailerUrl?: string;
   source: SourceMetadata;
 }
 

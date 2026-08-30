@@ -16,6 +16,7 @@ export type StoreDirectoryEntry = {
   source: string;
   lastVerified: string;
   deliveryCapability: Store['delivery']['capability'];
+  retailerUrl?: string;
   openNow: boolean | null;
 };
 
@@ -142,18 +143,27 @@ export function storesFromDirectory(pricedStores: Store[], entries: readonly Sto
   const pricedById = new Map(pricedStores.map((store) => [store.id, store]));
   return entries.filter((entry) => entry.isActive).map((entry, index) => {
     const priced = pricedById.get(entry.storeId);
-    if (priced) return priced;
+    if (priced) return {
+      ...priced,
+      chain: entry.chainName,
+      name: `${entry.chainName} · ${entry.name}`,
+      address: `${entry.address}, ${entry.city}`,
+      coordinates: entry.coordinates,
+      distanceKm: null,
+      openNow: entry.openNow,
+      delivery: { ...priced.delivery, capability: entry.deliveryCapability, retailerUrl: entry.retailerUrl ?? priced.delivery.retailerUrl },
+    } satisfies Store;
     return {
       id: entry.storeId,
       retailerId: entry.retailerId,
       chain: entry.chainName,
       name: `${entry.chainName} · ${entry.name}`,
       address: `${entry.address}, ${entry.city}`,
-      distanceKm: 0,
+      distanceKm: null,
       color: colors[index % colors.length],
       coordinates: entry.coordinates,
       openNow: entry.openNow,
-      delivery: { capability: entry.deliveryCapability, coverageVerified: false, feesVerified: false },
+      delivery: { capability: entry.deliveryCapability, retailerUrl: entry.retailerUrl, coverageVerified: false, feesVerified: false },
     } satisfies Store;
   });
 }
@@ -204,6 +214,7 @@ function normalizedExternalRecord(raw: unknown): NormalizedStore | null {
     isActive: value.isActive !== false,
     openNow: typeof value.openNow === 'boolean' ? value.openNow : null,
     deliveryCapability: value.deliveryCapability === 'deep_link' || value.deliveryCapability === 'partial' || value.deliveryCapability === 'manual' || value.deliveryCapability === 'unsupported' ? value.deliveryCapability : undefined,
+    retailerUrl: typeof value.retailerUrl === 'string' ? value.retailerUrl : undefined,
     source: sourceMetadata(retailerId, value.source, value.lastVerified),
   };
 }
@@ -226,6 +237,7 @@ function directoryEntryFromRecord(record: NormalizedStore): StoreDirectoryEntry 
     source: source.sourceUri,
     lastVerified,
     deliveryCapability: record.deliveryCapability ?? 'unsupported',
+    retailerUrl: record.retailerUrl,
     openNow: record.openNow ?? null,
   };
 }
@@ -239,13 +251,13 @@ function externalRecords(payload: unknown): unknown[] {
   return [];
 }
 
-function sourceClaimsComplete(payload: unknown) {
+function sourceClaimsComplete(payload: unknown, recordCount: number) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
   const value = payload as Record<string, unknown>;
-  if (value.complete === true || value.coverageStatus === 'complete') return true;
-  if (!value.completeness || typeof value.completeness !== 'object') return false;
-  const completeness = value.completeness as Record<string, unknown>;
-  return completeness.complete === true || completeness.coverageStatus === 'complete';
+  const completeness = value.completeness && typeof value.completeness === 'object' ? value.completeness as Record<string, unknown> : value;
+  const declaredComplete = value.complete === true || value.coverageStatus === 'complete' || completeness.complete === true || completeness.coverageStatus === 'complete';
+  const expectedBranchCount = completeness.expectedBranchCount ?? value.expectedBranchCount;
+  return declaredComplete && typeof expectedBranchCount === 'number' && Number.isInteger(expectedBranchCount) && expectedBranchCount === recordCount;
 }
 
 /**
@@ -271,8 +283,9 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
       const imported = await importStoreDirectory((async function* () { yield* normalized; })());
       if (!rawRecords.length || invalidCount > 0 || !directoryImportIsSafe(imported)) throw new Error('directory source failed validation');
       const entries = imported.records.map(directoryEntryFromRecord);
-      const limitations = sourceClaimsComplete(payload) ? [] : ['מקור הסניפים נטען אך לא הצהיר שכיסויו מלא; אין להציגו כמאגר ישראלי מלא.'];
-      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, sourceClaimsComplete(payload)) };
+      const complete = sourceClaimsComplete(payload, rawRecords.length);
+      const limitations = complete ? [] : ['מקור הסניפים חייב להצהיר על כיסוי מלא ולספק expectedBranchCount שתואם לכל הרשומות התקינות; אין להציג מקור חלקי כמאגר ישראלי מלא.'];
+      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, complete) };
       directoryCache.set(endpoint, { expiresAt: Date.now() + directoryCacheTtlMs, result });
       return result;
     } finally {

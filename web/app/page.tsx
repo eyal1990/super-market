@@ -78,6 +78,7 @@ export default function Home() {
   const [handoffError, setHandoffError] = useState('');
   const [liveMessage, setLiveMessage] = useState('');
   const [clientReady, setClientReady] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
   const basketHydrated = useRef(false);
   const modeHydrated = useRef(false);
   const physicalStoresRef = useRef<Store[]>([]);
@@ -90,9 +91,10 @@ export default function Home() {
   const [directorySearchNonce, setDirectorySearchNonce] = useState(0);
 
   useEffect(() => {
+    if (!storageReady) return;
     const frame = window.requestAnimationFrame(() => setClientReady(true));
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [storageReady]);
 
   useEffect(() => {
     if (!locationOpen && !compareOpen) return;
@@ -130,6 +132,7 @@ export default function Home() {
         // A corrupt or unavailable local basket should not prevent shopping.
       }
       basketHydrated.current = true;
+      if (modeHydrated.current) setStorageReady(true);
     });
   }, []);
 
@@ -152,6 +155,7 @@ export default function Home() {
         // A missing preference is safe; physical shopping remains the default.
       }
       modeHydrated.current = true;
+      if (basketHydrated.current) setStorageReady(true);
     });
   }, []);
 
@@ -183,7 +187,8 @@ export default function Home() {
           const pendingAddress = pendingDirectoryAddress.current;
           if (pendingAddress === query) {
             pendingDirectoryAddress.current = null;
-            if (results[0]) void loadNearbyStores(pendingAddress, results[0].lat, results[0].lon, 'address');
+            const exactResult = results.find((result) => result.isExactAddress);
+            if (exactResult) void loadNearbyStores(pendingAddress, exactResult.lat, exactResult.lon, 'address');
             else setLocationError('לא הצלחנו לאתר את הכתובת הזו במפה. אפשר לנסות את שם הרחוב והעיר או להשתמש במיקום הנוכחי.');
           }
         })
@@ -229,6 +234,7 @@ export default function Home() {
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === 'AbortError') return;
           setDirectorySuggestions([]);
+          setLocationNotice('חיפוש הכתובות אינו זמין כרגע. אפשר לנסות שוב או להשתמש במיקום הנוכחי.');
         })
         .finally(() => {
           if (!controller.signal.aborted) setDirectorySearchLoading(false);
@@ -301,6 +307,7 @@ export default function Home() {
     if (mode === 'delivery') {
       const supportedStores = physicalStoresRef.current.filter((store) => store.delivery.capability !== 'unsupported');
       setNearbyStores(supportedStores);
+      if (physicalStoresRef.current.length > 0 && supportedStores.length === 0) setStoreDirectoryNote('לא נמצאו סניפים עם יכולת העברת סל למשלוח באזור הזה. אפשר לעבור לקנייה פיזית.');
       if (selectedStore && !supportedStores.some((store) => store.id === selectedStore)) {
         setSelectedStore(null);
         message = 'הסניף הקודם לא תומך בהעברת סל; בחרו סניף משלוח אחר';
@@ -342,21 +349,22 @@ export default function Home() {
     try {
       const response = await fetch(`/api/stores/nearby?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}&mode=physical`);
       if (!response.ok) throw new Error('nearby stores request failed');
-      const payload = await response.json() as { stores?: Store[]; fallbackUsed?: boolean; limitations?: string[] };
+      const payload = await response.json() as { stores?: Store[]; fallbackUsed?: boolean; outOfCoverage?: boolean; limitations?: string[] };
       if (requestId !== nearbyRequestId.current) return;
       const foundStores = Array.isArray(payload.stores) ? payload.stores : [];
       if (!foundStores.length) {
         setLocation({ label, source, status: 'unresolved' });
-        setLocationError('לא נמצאו סניפים בנתוני הדוגמה באזור הזה. אפשר לנסות כתובת אחרת.');
+        setStoreCoverageFallback(payload.outOfCoverage === true);
+        setLocationError(payload.outOfCoverage === true ? 'לא נמצאו סניפים בטווח שביקשתם. נסו להגדיל את הרדיוס או לבחור כתובת אחרת.' : 'לא נמצאו סניפים באזור הזה. אפשר לנסות כתובת אחרת.');
         return;
       }
       physicalStoresRef.current = foundStores;
       setNearbyStores(shoppingModeRef.current === 'delivery' ? foundStores.filter((store) => store.delivery.capability !== 'unsupported') : foundStores);
-      setStoreCoverageFallback(payload.fallbackUsed === true);
+      setStoreCoverageFallback(payload.outOfCoverage === true || payload.fallbackUsed === true);
       setStoreDirectoryNote(Array.isArray(payload.limitations) ? payload.limitations.join(' ') : '');
       setLocation({ label, source, status: 'resolved' });
       setLocationOpen(false);
-      setLiveMessage(payload.fallbackUsed ? `לא נמצאו סניפים בטווח המבוקש; מוצגים הסניפים הקרובים ביותר ל${label}` : `נמצאו ${foundStores.length} סניפים ליד ${label}`);
+      setLiveMessage(payload.outOfCoverage ? `לא נמצאו סניפים בטווח המבוקש ליד ${label}` : `נמצאו ${foundStores.length} סניפים ליד ${label}`);
     } catch {
       if (requestId !== nearbyRequestId.current) return;
       setLocation({ label, source, status: 'unresolved' });
@@ -387,6 +395,7 @@ export default function Home() {
 
   async function requestHandoff(storeId: string) {
     setHandoffError('');
+    setHandoff(null);
     setHandoffLoading(true);
     try {
       const response = await fetch('/api/basket/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'delivery', storeId, items: basket }) });

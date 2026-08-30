@@ -21,6 +21,6 @@ export async function GET(request: Request) {
   const results = allResults.slice((page - 1) * pageSize, page * pageSize);
   return NextResponse.json({ results: results.map((product) => {
     const price = requestedStoreId ? getPrice(product, requestedStoreId) : null;
-    return { ...product, price, trustState: price ? priceTrustState(price) : 'unknown' };
+    return { id: product.id, barcode: product.barcode, name: product.name, brand: product.brand, size: product.size, category: product.category, tag: product.tag, icon: product.icon, aliases: product.aliases, imageUrl: product.imageUrl, imageAlt: product.imageAlt, promotions: product.promotions, price, trustState: price ? priceTrustState(price) : 'unknown' };
   }), page, pageSize, total: allResults.length, hasMore: page * pageSize < allResults.length, storeId: requestedStoreId, query, freshness: 'הנתונים עודכנו היום', catalog: catalogCompleteness, directory: directory.completeness }, { headers: noStoreHeaders });
 }

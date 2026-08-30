@@ -45,6 +45,25 @@ test('directory merge retains priced branches and does not invent price observat
   assert.ok(!Object.keys(merged.find((store) => store.id === 'shufersal-jerusalem-givat-shaul') ?? {}).includes('prices'));
 });
 
+test('directory metadata remains authoritative when it overlaps a priced branch', () => {
+  const merged = storesFromDirectory(stores, [{
+    ...nationwideStoreDirectory[0]!,
+    address: '×›×ª×•×‘×ª ×ž×¢×•×“×›× ×ª',
+    city: '×ª×œ ××‘×™×‘-×™×¤×•',
+    coordinates: { lat: 32.1, lon: 34.8 },
+    deliveryCapability: 'deep_link',
+    retailerUrl: 'https://example.invalid/store',
+    openNow: null,
+  }]);
+  const branch = merged[0]!;
+  assert.equal(branch.address, '×›×ª×•×‘×ª ×ž×¢×•×“×›× ×ª, ×ª×œ ××‘×™×‘-×™×¤×•');
+  assert.deepEqual(branch.coordinates, { lat: 32.1, lon: 34.8 });
+  assert.equal(branch.delivery.capability, 'deep_link');
+  assert.equal(branch.delivery.retailerUrl, 'https://example.invalid/store');
+  assert.equal(branch.openNow, null);
+  assert.equal(branch.distanceKm, null);
+});
+
 test('a configured complete directory source is loaded, cached, and exposed as configured coverage', async () => {
   const key = 'https://fixture.invalid/directory-complete.json';
   process.env.STORE_DIRECTORY_URL = key;
@@ -52,7 +71,7 @@ test('a configured complete directory source is loaded, cached, and exposed as c
     let calls = 0;
     const result = await loadStoreDirectory(async () => {
       calls += 1;
-      return new Response(JSON.stringify({ complete: true, stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
+      return new Response(JSON.stringify({ completeness: { complete: true, expectedBranchCount: 1 }, stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
     });
     const cached = await loadStoreDirectory(async () => { calls += 1; return new Response('{}', { status: 500 }); });
     assert.equal(result.completeness.dataset, 'configured-source');

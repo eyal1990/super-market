@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { calculateBasket, stores } from '@/lib/data';
 import { rateLimit } from '@/lib/api';
 import { loadStoreDirectory, storesFromDirectory } from '@/lib/store-directory';
+import { validateBasketItems } from '@/lib/shopping';
 
 export async function POST(request: Request) {
   const limited = rateLimit(request, 'basket-compare'); if (limited) return limited;
@@ -10,7 +11,8 @@ export async function POST(request: Request) {
     const items = payload.items;
     if (!items || typeof items !== 'object' || Array.isArray(items)) return NextResponse.json({ error: 'סל לא תקין' }, { status: 400 });
     if (Object.keys(items).length > 100) return NextResponse.json({ error: 'הסל מכיל יותר מדי מוצרים' }, { status: 400 });
-    const safeItems = Object.fromEntries(Object.entries(items).filter(([, quantity]) => Number.isInteger(quantity) && quantity > 0 && quantity <= 99));
+    const safeItems = validateBasketItems(items);
+    if (!safeItems) return NextResponse.json({ error: 'הסל מכיל מוצרים או כמויות לא תקינים' }, { status: 400 });
     const directory = await loadStoreDirectory();
     const catalogStores = storesFromDirectory(stores, directory.entries);
     if (typeof payload.storeId !== 'string' || !catalogStores.some((store) => store.id === payload.storeId)) return NextResponse.json({ error: 'יש לבחור סניף מוכר לפני השוואת הסל' }, { status: 400 });
