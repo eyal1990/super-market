@@ -96,6 +96,12 @@ export function getProductImageMetadata(product: Pick<Product, 'imageUrl' | 'ima
   }
 }
 
+/** Preserve the honest placeholder contract after a browser image error. */
+export function failedProductImageMetadata(product: Pick<Product, 'imageUrl' | 'imageAlt'>): ProductImageMetadata {
+  const metadata = getProductImageMetadata(product);
+  return { ...metadata, url: undefined, status: 'failed', attribution: metadata.attribution };
+}
+
 export const stores: Store[] = [
   { id: 'shufersal-avenue', retailerId: 'shufersal', chain: 'שופרסל', name: 'שופרסל דיל · אבן גבירול', distanceKm: 0.8, address: 'אבן גבירול 124, תל אביב', color: 'mint', coordinates: { lat: 32.086, lon: 34.783 }, openNow: true, delivery: { capability: 'partial', retailerUrl: 'https://www.shufersal.co.il/', coverageVerified: false, feesVerified: false } },
   { id: 'rami-levy-azrieli', retailerId: 'rami-levy', chain: 'רמי לוי', name: 'רמי לוי · מגדלי תל אביב', distanceKm: 1.6, address: 'דרך מנחם בגין 132, תל אביב', color: 'blue', coordinates: { lat: 32.074, lon: 34.79 }, openNow: true, delivery: { capability: 'manual', retailerUrl: 'https://www.rami-levy.co.il/', coverageVerified: false, feesVerified: false } },

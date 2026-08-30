@@ -1,5 +1,6 @@
 import type { Product, ProductImageMetadata, ProductProvenance, PriceObservation } from '../data.ts';
-import type { NormalizedPrice, SourceMetadata } from './types.ts';
+import { readBoundedBody, runIngestion } from './core.ts';
+import type { DiscoveryInput, IngestionRunResult, NormalizedPrice, RetailerSourceAdapter, SourceMetadata } from './types.ts';
 
 export type CatalogImportMode = 'full' | 'incremental';
 export type CatalogImageHealth = 'verified' | 'candidate' | 'missing' | 'failed';
@@ -63,6 +64,53 @@ export type CatalogImportResult = {
   imageCoverage: { total: number; withUrl: number; candidate: number; missing: number };
 };
 
+export type CatalogSourceScope = {
+  id: string;
+  countryCode: string;
+  expectedRecordCount?: number;
+  expectedProductCount?: number;
+  expectedBranchCount?: number;
+  expectedRetailers?: string[];
+  sourceVersion?: string;
+  asOf?: string;
+};
+
+export type CatalogSourceCompleteness = {
+  dataset: 'configured-source' | 'adapter-feed' | 'empty';
+  coverageStatus: 'configured-partial' | 'configured-complete-for-scope' | 'unavailable';
+  recordCount: number;
+  productCount: number;
+  branchCount: number;
+  retailers: string[];
+  lastVerified: string | null;
+  scope: CatalogSourceScope;
+  limitations: string[];
+};
+
+export type CatalogSourceLoadResult = {
+  records: CatalogProductRecord[];
+  products: Product[];
+  completeness: CatalogSourceCompleteness;
+  warnings: string[];
+  fallbackUsed: boolean;
+  ingestion?: IngestionRunResult;
+};
+
+export type CatalogSourceLoadOptions = {
+  endpoint?: string;
+  previous?: readonly CatalogProductRecord[];
+  fetchImpl?: typeof fetch;
+  maxBytes?: number;
+  timeoutMs?: number;
+};
+
+const catalogSourceCache = new Map<string, { expiresAt: number; result: CatalogSourceLoadResult }>();
+const catalogSourceInflight = new Map<string, Promise<CatalogSourceLoadResult>>();
+const catalogSourceCacheTtlMs = 5 * 60 * 1000;
+const catalogSourceFailureTtlMs = 30 * 1000;
+const catalogSourceDefaultMaxBytes = 200 * 1024 * 1024;
+const catalogSourceDefaultTimeoutMs = 30_000;
+
 function text(value: string | undefined): string | undefined {
   const result = value?.replace(/\s+/g, ' ').trim();
   return result || undefined;
@@ -118,14 +166,22 @@ function shouldReplace(candidate: CatalogProductRecord, existing: CatalogProduct
   return stableTieBreak(candidate).localeCompare(stableTieBreak(existing), 'en-US') > 0;
 }
 
-function normalizeImage(url: string | undefined, alt: string | undefined, sourceFileId: string): CatalogImageMetadata {
+function normalizeImage(url: string | undefined, alt: string | undefined, sourceFileId: string, sourceUri: string): CatalogImageMetadata {
   const fallbackLabel = 'תמונת מוצר אינה זמינה';
   const meaningfulAlt = text(alt);
   if (!url || !meaningfulAlt) return { status: 'missing', alt: meaningfulAlt ?? fallbackLabel, fallbackLabel, sourceFileId };
   try {
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported image protocol');
-    return { url: parsed.toString(), status: 'candidate', alt: meaningfulAlt, fallbackLabel, sourceFileId };
+    return {
+      url: parsed.toString(),
+      status: 'candidate',
+      alt: meaningfulAlt,
+      fallbackLabel,
+      source: sourceUri,
+      attribution: 'Image URL supplied by the retailer feed; verify current rights and attribution before publication',
+      sourceFileId,
+    };
   } catch {
     return { status: 'missing', alt: meaningfulAlt, fallbackLabel, sourceFileId };
   }
@@ -152,7 +208,7 @@ function toCatalogRecord(record: NormalizedPrice): CatalogProductRecord {
     isWeighted: record.isWeighted === true,
     observedAt: new Date(record.observedAt).toISOString(),
     source,
-    image: normalizeImage(record.imageUrl, record.imageAlt ?? productName, source.sourceFileId),
+    image: normalizeImage(record.imageUrl, record.imageAlt ?? productName, source.sourceFileId, source.sourceUri),
   };
 }
 
@@ -271,6 +327,234 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
     branchAvailability: availability(publishedRecords),
     imageCoverage: imageCoverage(publishedRecords),
   };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function sourceDocumentKind(value: unknown): SourceMetadata['documentKind'] {
+  return value === 'price_incremental' ? 'price_incremental' : 'price_full';
+}
+
+function externalSourceMetadata(raw: Record<string, unknown>, root: Record<string, unknown>, retailerId: string, index: number, now: string): SourceMetadata {
+  const source = objectRecord(raw.source) ?? objectRecord(root.source);
+  const observedAt = typeof raw.observedAt === 'string' ? raw.observedAt : typeof root.observedAt === 'string' ? root.observedAt : now;
+  const sourceFileId = typeof source?.sourceFileId === 'string' && source.sourceFileId.trim()
+    ? source.sourceFileId.trim()
+    : typeof raw.sourceFileId === 'string' && raw.sourceFileId.trim() ? raw.sourceFileId.trim() : `configured-catalog-${index + 1}`;
+  const sourceUri = typeof source?.sourceUri === 'string' && source.sourceUri.trim()
+    ? source.sourceUri.trim()
+    : typeof raw.sourceUri === 'string' && raw.sourceUri.trim() ? raw.sourceUri.trim() : 'configured://catalog';
+  const downloadedAt = typeof source?.downloadedAt === 'string' ? source.downloadedAt : now;
+  const publishedAt = typeof source?.publishedAt === 'string' ? source.publishedAt : observedAt;
+  return {
+    retailerId: typeof source?.retailerId === 'string' ? source.retailerId : retailerId,
+    adapterId: typeof source?.adapterId === 'string' && source.adapterId.trim() ? source.adapterId : 'configured-catalog',
+    sourceFileId,
+    sourceUri,
+    fileName: typeof source?.fileName === 'string' && source.fileName.trim() ? source.fileName : 'catalog.json',
+    documentKind: sourceDocumentKind(source?.documentKind),
+    publishedAt,
+    downloadedAt,
+    checksum: typeof source?.checksum === 'string' && source.checksum.trim() ? source.checksum : 'configured-source',
+  };
+}
+
+function externalPriceRecord(raw: unknown, root: Record<string, unknown>, index: number, now: string): NormalizedPrice | null {
+  const value = objectRecord(raw);
+  if (!value) return null;
+  const retailerId = typeof value.retailerId === 'string' ? value.retailerId.trim() : typeof value.retailer === 'string' ? value.retailer.trim() : typeof root.retailerId === 'string' ? root.retailerId.trim() : '';
+  const storeId = typeof value.storeId === 'string' ? value.storeId.trim() : typeof value.branchId === 'string' ? value.branchId.trim() : '';
+  const retailerItemId = typeof value.retailerItemId === 'string' ? value.retailerItemId.trim() : typeof value.itemId === 'string' ? value.itemId.trim() : typeof value.sku === 'string' ? value.sku.trim() : '';
+  const rawPrice = value.priceNis ?? value.price;
+  const priceNis = rawPrice === null ? null : typeof rawPrice === 'number' && Number.isFinite(rawPrice) ? rawPrice : typeof rawPrice === 'string' && rawPrice.trim() && Number.isFinite(Number(rawPrice)) ? Number(rawPrice) : Number.NaN;
+  const observedAt = typeof value.observedAt === 'string' ? value.observedAt : typeof root.observedAt === 'string' ? root.observedAt : now;
+  if (!retailerId || !storeId || !retailerItemId || (Number.isNaN(priceNis) && value.isAvailable !== false)) return null;
+  if (priceNis !== null && (!Number.isFinite(priceNis) || priceNis < 0)) return null;
+  if (!observedAt || validTimestamp(observedAt) === null) return null;
+  const source = externalSourceMetadata(value, root, retailerId, index, now);
+  return {
+    retailerId,
+    storeId,
+    retailerItemId,
+    barcode: typeof value.barcode === 'string' ? value.barcode.trim() || undefined : undefined,
+    productName: typeof value.productName === 'string' ? value.productName : typeof value.name === 'string' ? value.name : undefined,
+    brand: typeof value.brand === 'string' ? value.brand : undefined,
+    size: typeof value.size === 'string' ? value.size : undefined,
+    category: typeof value.category === 'string' ? value.category : undefined,
+    aliases: Array.isArray(value.aliases) ? value.aliases.filter((alias): alias is string => typeof alias === 'string') : undefined,
+    imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : undefined,
+    imageAlt: typeof value.imageAlt === 'string' ? value.imageAlt : undefined,
+    priceNis: priceNis === null ? null : priceNis,
+    unitPriceNis: typeof value.unitPriceNis === 'number' && Number.isFinite(value.unitPriceNis) ? value.unitPriceNis : undefined,
+    unitOfMeasure: typeof value.unitOfMeasure === 'string' ? value.unitOfMeasure : undefined,
+    quantity: typeof value.quantity === 'number' && Number.isFinite(value.quantity) ? value.quantity : undefined,
+    isAvailable: typeof value.isAvailable === 'boolean' ? value.isAvailable : undefined,
+    isWeighted: value.isWeighted === true,
+    observedAt,
+    source,
+  };
+}
+
+function externalCatalogRecords(payload: unknown): { root: Record<string, unknown>; records: unknown[] } {
+  if (Array.isArray(payload)) return { root: {}, records: payload };
+  const root = objectRecord(payload) ?? {};
+  for (const key of ['records', 'prices', 'products']) if (Array.isArray(root[key])) return { root, records: root[key] as unknown[] };
+  const nested = objectRecord(root.result);
+  if (nested) for (const key of ['records', 'prices', 'products']) if (Array.isArray(nested[key])) return { root: { ...root, ...nested }, records: nested[key] as unknown[] };
+  return { root, records: [] };
+}
+
+function catalogScope(payload: Record<string, unknown>): CatalogSourceScope {
+  const completeness = objectRecord(payload.completeness) ?? payload;
+  const scope = objectRecord(completeness.scope) ?? objectRecord(payload.scope) ?? {};
+  const integer = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()).sort() : undefined;
+  return {
+    id: typeof scope.id === 'string' && scope.id.trim() ? scope.id.trim() : 'configured-catalog',
+    countryCode: typeof scope.countryCode === 'string' ? scope.countryCode.trim().toUpperCase() : '',
+    expectedRecordCount: integer(scope.expectedRecordCount ?? scope.expectedRecords),
+    expectedProductCount: integer(scope.expectedProductCount),
+    expectedBranchCount: integer(scope.expectedBranchCount),
+    expectedRetailers: strings(scope.expectedRetailers ?? scope.expectedChains),
+    sourceVersion: typeof scope.sourceVersion === 'string' ? scope.sourceVersion : typeof scope.version === 'string' ? scope.version : undefined,
+    asOf: typeof scope.asOf === 'string' ? scope.asOf : typeof scope.lastVerified === 'string' ? scope.lastVerified : undefined,
+  };
+}
+
+function catalogProductCount(records: readonly CatalogProductRecord[]) {
+  return new Set(records.map((record) => catalogProductIdentity(record))).size;
+}
+
+function catalogCompletenessFor(records: readonly CatalogProductRecord[], dataset: CatalogSourceCompleteness['dataset'], scope: CatalogSourceScope, lastVerified: string | null, complete: boolean, limitations: string[]): CatalogSourceCompleteness {
+  return {
+    dataset,
+    coverageStatus: complete ? 'configured-complete-for-scope' : records.length ? 'configured-partial' : 'unavailable',
+    recordCount: records.length,
+    productCount: catalogProductCount(records),
+    branchCount: new Set(records.map((record) => `${record.retailerId}:${record.storeId}`)).size,
+    retailers: [...new Set(records.map((record) => record.retailerId))].sort(),
+    lastVerified,
+    scope,
+    limitations,
+  };
+}
+
+function configuredCatalogCompleteness(payload: Record<string, unknown>, records: readonly CatalogProductRecord[]): CatalogSourceCompleteness {
+  const scope = catalogScope(payload);
+  const completeness = objectRecord(payload.completeness) ?? payload;
+  const declaredComplete = payload.complete === true || completeness.complete === true || completeness.coverageStatus === 'complete';
+  const retailers = [...new Set(records.map((record) => record.retailerId))].sort();
+  const expectedRetailers = scope.expectedRetailers ?? [];
+  const validAsOf = Boolean(scope.asOf && validTimestamp(scope.asOf) !== null);
+  const complete = declaredComplete
+    && scope.countryCode === 'IL'
+    && Boolean(scope.id && scope.sourceVersion && validAsOf)
+    && scope.expectedRecordCount === records.length
+    && (scope.expectedProductCount === undefined || scope.expectedProductCount === catalogProductCount(records))
+    && (scope.expectedBranchCount === undefined || scope.expectedBranchCount === new Set(records.map((record) => `${record.retailerId}:${record.storeId}`)).size)
+    && (expectedRetailers.length === 0 || expectedRetailers.length === retailers.length && expectedRetailers.every((retailer) => retailers.includes(retailer)));
+  const limitations = complete ? [] : ['המקור חייב להצהיר על scope מלא בישראל, גרסה, תאריך asOf, מספר רשומות ייחודי ומספר סניפים/רשתות כאשר הם נדרשים; אחרת הוא מסומן חלקי.'];
+  return catalogCompletenessFor(records, 'configured-source', scope, scope.asOf ?? (records.map((record) => record.observedAt).sort().at(-1) ?? null), complete, limitations);
+}
+
+function emptyCatalogSourceResult(warnings: string[] = []): CatalogSourceLoadResult {
+  return {
+    records: [],
+    products: [],
+    completeness: catalogCompletenessFor([], 'empty', { id: 'configured-catalog', countryCode: '' }, null, false, ['לא הוגדר מקור קטלוג תקין; מוצגים נתוני fixture בלבד.']),
+    warnings,
+    fallbackUsed: false,
+  };
+}
+
+const catalogSourceLastValid = new Map<string, CatalogSourceLoadResult>();
+
+async function fetchConfiguredCatalog(endpoint: string, options: CatalogSourceLoadOptions): Promise<CatalogSourceLoadResult> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const maxBytes = options.maxBytes ?? catalogSourceDefaultMaxBytes;
+  const timeoutMs = options.timeoutMs ?? catalogSourceDefaultTimeoutMs;
+  const now = new Date().toISOString();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(endpoint, { headers: { accept: 'application/json' }, signal: controller.signal });
+      if (!response.ok) throw new Error(`catalog source returned HTTP ${response.status}`);
+      const body = await readBoundedBody(response, maxBytes);
+      const payload = JSON.parse(new TextDecoder().decode(body)) as unknown;
+      const { root, records: rawRecords } = externalCatalogRecords(payload);
+      if (!rawRecords.length) throw new Error('catalog source returned no records');
+      const normalized = rawRecords.map((raw, index) => externalPriceRecord(raw, root, index, now));
+      const invalidCount = normalized.filter((record): record is null => record === null).length;
+      const records = normalized.filter((record): record is NormalizedPrice => Boolean(record));
+      const scope = catalogScope(root);
+      const imported = await importCatalogPrices((async function* () { yield* records; })(), {
+        mode: 'full',
+        previous: options.previous,
+        expectedRecords: scope.expectedRecordCount,
+      });
+      if (invalidCount || !catalogImportIsSafe(imported)) throw new Error(`catalog source failed validation (${invalidCount} malformed rows)`);
+      const completeness = configuredCatalogCompleteness(root, imported.records);
+      const result: CatalogSourceLoadResult = { records: imported.records, products: materializeCatalogProducts(imported.records), completeness, warnings: imported.warnings, fallbackUsed: false };
+      catalogSourceLastValid.set(endpoint, result);
+      catalogSourceCache.set(endpoint, { expiresAt: Date.now() + catalogSourceCacheTtlMs, result });
+      return result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    const prior = options.previous?.length ? { records: [...options.previous], products: materializeCatalogProducts(options.previous), completeness: catalogCompletenessFor(options.previous, 'configured-source', { id: 'previous-snapshot', countryCode: 'IL' }, options.previous.map((record) => record.observedAt).sort().at(-1) ?? null, false, ['התרעננות המקור נכשלה; נשמר ה-snapshot התקין האחרון.']), warnings: [], fallbackUsed: true } : catalogSourceLastValid.get(endpoint);
+    if (prior) {
+      const result = { ...prior, warnings: [...prior.warnings, error instanceof Error ? error.message : 'catalog source unavailable'], fallbackUsed: true, completeness: { ...prior.completeness, limitations: [...prior.completeness.limitations, 'המקור החדש לא אומת ולכן לא החליף את הנתונים התקינים.'] } };
+      catalogSourceCache.set(endpoint, { expiresAt: Date.now() + catalogSourceFailureTtlMs, result });
+      return result;
+    }
+    const result = { ...emptyCatalogSourceResult([error instanceof Error ? error.message : 'catalog source unavailable']), completeness: catalogCompletenessFor([], 'empty', { id: 'configured-catalog', countryCode: 'IL' }, null, false, ['המקור החיצוני לא זמין; אין snapshot קודם שניתן לשמר.']) , fallbackUsed: true };
+    catalogSourceCache.set(endpoint, { expiresAt: Date.now() + catalogSourceFailureTtlMs, result });
+    return result;
+  }
+}
+
+/** Load a validated normalized JSON snapshot published by an ingestion worker. */
+export async function loadConfiguredCatalog(options: CatalogSourceLoadOptions = {}): Promise<CatalogSourceLoadResult> {
+  const endpoint = options.endpoint ?? process.env.CATALOG_SOURCE_URL?.trim();
+  if (!endpoint) return emptyCatalogSourceResult(['CATALOG_SOURCE_URL is not configured']);
+  const configuredMaxBytes = Number(process.env.CATALOG_SOURCE_MAX_BYTES);
+  const configuredTimeoutMs = Number(process.env.CATALOG_SOURCE_TIMEOUT_MS);
+  const effectiveOptions = {
+    ...options,
+    maxBytes: options.maxBytes ?? (Number.isSafeInteger(configuredMaxBytes) && configuredMaxBytes > 0 ? configuredMaxBytes : undefined),
+    timeoutMs: options.timeoutMs ?? (Number.isSafeInteger(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : undefined),
+  };
+  const cached = catalogSourceCache.get(endpoint);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  const pending = catalogSourceInflight.get(endpoint);
+  if (pending) return pending;
+  const request = fetchConfiguredCatalog(endpoint, effectiveOptions);
+  catalogSourceInflight.set(endpoint, request);
+  try { return await request; } finally { if (catalogSourceInflight.get(endpoint) === request) catalogSourceInflight.delete(endpoint); }
+}
+
+/** Run a retailer adapter over its complete/incremental price documents and publish atomically. */
+export async function importCatalogFromAdapter(adapter: RetailerSourceAdapter, input: DiscoveryInput, options: CatalogImportOptions = {}): Promise<CatalogSourceLoadResult> {
+  const normalizedInput: DiscoveryInput = {
+    ...input,
+    retailerId: adapter.retailerId,
+    documentKinds: input.documentKinds?.filter((kind) => kind === 'price_full' || kind === 'price_incremental') ?? ['price_full'],
+  };
+  const records: NormalizedPrice[] = [];
+  const ingestion = await runIngestion(adapter, normalizedInput, {
+    async upsertPrices(stream) { for await (const record of stream) records.push(record); return records.length; },
+  });
+  const onlyIncremental = normalizedInput.documentKinds?.length && normalizedInput.documentKinds.every((kind) => kind === 'price_incremental');
+  const imported = await importCatalogPrices((async function* () { yield* records; })(), { ...options, mode: options.mode ?? (onlyIncremental ? 'incremental' : 'full') });
+  const published = ingestion.status === 'completed' && imported.published;
+  const safeRecords = published ? imported.records : options.previous ? [...options.previous] : imported.records;
+  const warnings = [...imported.warnings, ...ingestion.warnings, ...ingestion.failures.map((failure) => `${failure.code}: ${failure.message}`)];
+  const sourceScope: CatalogSourceScope = { id: `${adapter.retailerId}-adapter-feed`, countryCode: 'IL', sourceVersion: normalizedInput.runKey, asOf: imported.records.map((record) => record.observedAt).sort().at(-1) };
+  return { records: safeRecords, products: materializeCatalogProducts(safeRecords), completeness: catalogCompletenessFor(safeRecords, 'adapter-feed', sourceScope, sourceScope.asOf ?? null, false, published ? ['הזנת adapter הושלמה, אך לא צורף להצהיר scope מלא ולכן היא אינה מסומנת ככיסוי ארצי מלא.'] : ['הייבוא לא הושלם במלואו; ה-snapshot הקודם נשמר ולא סומן ככיסוי מלא.']), warnings, fallbackUsed: !published, ingestion: { ...ingestion }, };
 }
 
 export function catalogImportIsSafe(result: CatalogImportResult, minimumRecords = 1) {

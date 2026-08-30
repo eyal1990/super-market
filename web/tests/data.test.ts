@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateBasket, calculateLine, getProductImageMetadata, isPromotionActive, products, searchProducts, stores } from '../lib/data.ts';
+import { calculateBasket, calculateLine, failedProductImageMetadata, getProductImageMetadata, isPromotionActive, products, searchProducts, stores } from '../lib/data.ts';
 
 test('Hebrew and barcode search returns the canonical product', () => {
   assert.equal(searchProducts('קורנפלקס')[0]?.id, 'cereal');
@@ -48,5 +48,7 @@ test('product image metadata distinguishes candidate URLs from honest placeholde
   assert.equal(products.every((product) => product.image?.status === 'candidate' && product.image?.alt === product.imageAlt), true);
   assert.equal(getProductImageMetadata({ imageUrl: undefined, imageAlt: 'מוצר ללא תמונה' }).status, 'missing');
   assert.equal(getProductImageMetadata({ imageUrl: 'javascript:alert(1)', imageAlt: 'מוצר' }).status, 'missing');
+  assert.equal(failedProductImageMetadata(products[0]!).status, 'failed');
+  assert.equal(failedProductImageMetadata(products[0]!).url, undefined);
   assert.match(products[0]?.image?.attribution ?? '', /Open Food Facts/);
 });

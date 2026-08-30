@@ -96,3 +96,17 @@ test('an unsafe configured directory keeps the valid fixture and explains the fa
     delete process.env.STORE_DIRECTORY_URL;
   }
 });
+
+test('a failed refresh preserves the last valid configured directory snapshot', async () => {
+  const key = 'https://fixture.invalid/directory-refresh-safe.json';
+  process.env.STORE_DIRECTORY_URL = key;
+  try {
+    const first = await loadStoreDirectory(async () => new Response(JSON.stringify({ completeness: { complete: true, scope: { id: 'safe-directory', countryCode: 'IL', expectedBranchCount: 1, expectedChains: ['fixture-live'], sourceVersion: 'v1', asOf: '2026-08-30' } }, stores: [record({ retailerId: 'fixture-live', storeId: 'safe-1' })] }), { status: 200 }), { forceRefresh: true });
+    const second = await loadStoreDirectory(async () => new Response(JSON.stringify({ stores: [{ storeId: 'missing-fields' }] }), { status: 200 }), { forceRefresh: true });
+    assert.equal(first.entries[0]?.storeId, 'safe-1');
+    assert.equal(second.entries[0]?.storeId, 'safe-1');
+    assert.match(second.completeness.limitations.at(-1)!, /snapshot/);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URL;
+  }
+});

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runIngestion } from '../lib/ingestion/core.ts';
-import { createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
+import { createConfiguredAdapterRegistry, createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
 import { parseCerberusPrices } from '../lib/ingestion/adapters/cerberus.ts';
-import { catalogImportIsSafe, importCatalogPrices, materializeCatalogProducts } from '../lib/ingestion/catalog.ts';
+import { catalogImportIsSafe, importCatalogFromAdapter, importCatalogPrices, loadConfiguredCatalog, materializeCatalogProducts } from '../lib/ingestion/catalog.ts';
 import type { DownloadedSourceFile, RetailerSourceAdapter, SourceFile } from '../lib/ingestion/types.ts';
 
 function downloaded(source: SourceFile, xml: string): DownloadedSourceFile {
@@ -17,6 +17,12 @@ test('Shufersal discovery recognizes current numeric branch filename patterns', 
   assert.equal(files[0].documentKind, 'price_incremental');
   assert.equal(files[0].storeId, '003');
   assert.equal(files[1].documentKind, 'stores');
+});
+
+test('configured adapter registry reads listing surfaces without making credentials implicit', () => {
+  const registry = createConfiguredAdapterRegistry({ NODE_ENV: 'test', CERBERUS_LISTING_URL: 'https://fixture.invalid/cerberus-listing.html', SHUFERSAL_LISTING_URL: 'https://fixture.invalid/shufersal/' });
+  assert.equal(registry.get('cerberus')?.metadata.endpointHints[0], 'ftp://url.retail.publishedprices.co.il');
+  assert.equal(registry.get('shufersal')?.metadata.requiresAuthentication, false);
 });
 
 test('case-insensitive XML parsing normalizes a price and records malformed rows as warnings', async () => {
@@ -94,8 +100,64 @@ test('catalog materialization retains product metadata, source provenance, image
   assert.equal(product.name, 'Product One');
   assert.equal(product.brand, 'Brand');
   assert.equal(product.image?.status, 'candidate');
+  assert.equal(product.image?.source, 'fixture://catalog-metadata');
+  assert.match(product.image?.attribution ?? '', /verify current rights/);
   assert.equal(product.provenance?.sourceFileIds[0], 'catalog-metadata');
   assert.equal(product.prices['branch-a']?.amount, 12.5);
   assert.equal(product.prices['branch-b']?.available, false);
   assert.deepEqual(product.branchAvailability, { 'branch-a': true, 'branch-b': false });
+});
+
+test('configured catalog snapshots require a declared scope and are cached after validation', async () => {
+  const endpoint = 'https://fixture.invalid/catalog-complete-20260830.json';
+  const source = { retailerId: 'fixture', adapterId: 'fixture-feed', sourceFileId: 'full-1', sourceUri: 'fixture://full-1', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'full-1' };
+  const payload = {
+    complete: true,
+    completeness: { scope: { id: 'fixture-catalog-2026-08', countryCode: 'IL', sourceVersion: '2026-08-30', asOf: '2026-08-30T08:00:00Z', expectedRecordCount: 2, expectedProductCount: 1, expectedBranchCount: 2, expectedRetailers: ['fixture'] } },
+    records: [
+      { retailerId: 'fixture', storeId: 'north', retailerItemId: 'milk', barcode: '100', productName: 'חלב', priceNis: 7, observedAt: '2026-08-30T08:00:00Z', source },
+      { retailerId: 'fixture', storeId: 'south', retailerItemId: 'milk', barcode: '100', productName: 'חלב', priceNis: 8, observedAt: '2026-08-30T08:00:00Z', source },
+    ],
+  };
+  let calls = 0;
+  const result = await loadConfiguredCatalog({ endpoint, fetchImpl: async () => { calls += 1; return new Response(JSON.stringify(payload), { status: 200 }); } });
+  const cached = await loadConfiguredCatalog({ endpoint, fetchImpl: async () => { calls += 1; return new Response('{}', { status: 500 }); } });
+  assert.equal(result.completeness.coverageStatus, 'configured-complete-for-scope');
+  assert.equal(result.records.length, 2);
+  assert.equal(result.products.length, 1);
+  assert.equal(cached.records.length, 2);
+  assert.equal(calls, 1);
+});
+
+test('malformed configured catalog snapshots never replace a valid previous snapshot', async () => {
+  const endpoint = 'https://fixture.invalid/catalog-invalid-20260830.json';
+  const source = { retailerId: 'fixture', adapterId: 'fixture-feed', sourceFileId: 'full-2', sourceUri: 'fixture://full-2', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'full-2' };
+  const previous = await importCatalogPrices((async function* () { yield { retailerId: 'fixture', storeId: 'north', retailerItemId: 'milk', barcode: '100', priceNis: 7, observedAt: '2026-08-30T08:00:00Z', source }; })());
+  const result = await loadConfiguredCatalog({ endpoint, previous: previous.records, fetchImpl: async () => new Response(JSON.stringify({ records: [{ retailerId: 'fixture', storeId: 'north', retailerItemId: '', priceNis: 7 }] }), { status: 200 }) });
+  assert.equal(result.fallbackUsed, true);
+  assert.deepEqual(result.records.map((record) => record.priceNis), [7]);
+  assert.ok(result.warnings.some((warning) => warning.includes('validation')));
+});
+
+test('adapter catalog import consumes every discovered full-price record and labels incomplete runs', async () => {
+  const source: SourceFile = { id: 'adapter-full', retailerId: 'fixture', documentKind: 'price_full', uri: 'fixture://adapter-full', fileName: 'PriceFull.xml' };
+  const adapter: RetailerSourceAdapter = {
+    retailerId: 'fixture',
+    metadata: { adapterId: 'fixture-feed', retailerId: 'fixture', displayName: 'Fixture feed', sourceFamily: 'retailer-portal', endpointHints: [], supportedDocumentKinds: ['price_full'], gzipExpected: false, requiresAuthentication: false, limitations: [] },
+    async discoverFiles() { return [source]; },
+    async downloadFile(file) { return downloaded(file, '<ROOT/>'); },
+    async *parseStores() { /* no-op */ },
+    async *parsePromotions() { /* no-op */ },
+    async *parsePrices(file) {
+      const shared = { retailerId: 'fixture', adapterId: 'fixture-feed', sourceFileId: file.source.id, sourceUri: file.source.uri, fileName: file.source.fileName, documentKind: 'price_full' as const, downloadedAt: file.downloadedAt, checksum: file.checksum };
+      yield { retailerId: 'fixture', storeId: 'north', retailerItemId: 'milk', barcode: '100', priceNis: 7, observedAt: '2026-08-30T08:00:00Z', source: shared };
+      yield { retailerId: 'fixture', storeId: 'south', retailerItemId: 'milk', barcode: '100', priceNis: 8, observedAt: '2026-08-30T08:00:00Z', source: shared };
+    },
+  };
+  const result = await importCatalogFromAdapter(adapter, { retailerId: 'fixture', runKey: 'fixture-adapter-run', now: new Date('2026-08-30T08:00:00Z') });
+  assert.equal(result.fallbackUsed, false);
+  assert.equal(result.ingestion?.status, 'completed');
+  assert.equal(result.records.length, 2);
+  assert.equal(result.products[0]?.prices.north?.amount, 7);
+  assert.equal(result.completeness.coverageStatus, 'configured-partial');
 });

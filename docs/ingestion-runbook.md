@@ -29,6 +29,35 @@ The database is disposable local development state. To apply a changed migration
 
 Full documents establish a complete snapshot for the relevant source scope. Incremental documents should be applied in publication order. Do not delete the current valid snapshot until a full document has passed download, parsing, validation, and commit.
 
+### Catalog publication and configured snapshots
+
+Use `importCatalogFromAdapter()` for a retailer adapter. It discovers every
+requested full-price document, parses all records, and sends the aggregate
+through `importCatalogPrices()`. A parser error, malformed row, empty source,
+unexpected count, or dangerous full-feed drop leaves the previous snapshot
+untouched. The adapter result is deliberately labelled `configured-partial`
+until a separate source manifest proves the scope.
+
+Workers that persist a validated result for the web process may publish a JSON
+snapshot at `CATALOG_SOURCE_URL`. The payload may use `records`, `prices`, or
+`products`, but each normalized record must include `retailerId`, `storeId`,
+`retailerItemId` (or the documented item alias), `priceNis` (or `price`),
+`observedAt`, and source metadata. An unavailable item must use
+`priceNis: null` and `isAvailable: false`; it must not be converted to zero.
+
+To be reported as complete, the payload must set `complete: true` and provide
+`completeness.scope` with `countryCode: "IL"`, a stable `id`, `sourceVersion`,
+valid `asOf`, and a matching `expectedRecordCount`. Supply
+`expectedProductCount`, `expectedBranchCount`, and `expectedRetailers` whenever
+the source publishes those totals. A bare array or mismatched manifest is
+accepted only as partial data and never as a claim of nationwide coverage.
+`loadConfiguredCatalog()` caches a validated snapshot and returns it when a
+later refresh fails; it never promotes an invalid or empty refresh.
+
+Set `CATALOG_SOURCE_MAX_BYTES` and `CATALOG_SOURCE_TIMEOUT_MS` to bound the
+server-side JSON snapshot fetch. Keep credentials, FTP/TLS clients, and raw
+retailer files in the worker environment; they are not browser configuration.
+
 ### Branch directory refresh
 
 Store documents normalize through `importStoreDirectory()` in

@@ -6,6 +6,8 @@ Validated 2026-08-30 for implementation planning. Live source formats remain rep
 | --- | --- | --- | --- |
 | Cerberus shared feed | Public web client reachable at `https://url.retail.publishedprices.co.il/`; FTP/TLS access and retailer credentials are deployment-dependent | Fixture-compatible adapter with discovery metadata | Built-in downloader intentionally handles HTTP(S); inject an FTP/TLS downloader in the worker. Filename/store conventions must be verified per retailer. |
 | Shufersal transparency portal | `https://prices.shufersal.co.il/` currently lists GZ `stores`, `price`, and `promofull` documents with paginated branch rows | Portal adapter with case-insensitive XML parser and pagination metadata | Session/cookie, download URL, and geo/network behavior must be monitored; portal changes produce a failed health run. |
+| Ministry of Economy “Israel Basket” | Official open-data dataset at [`data.gov.il/he/datasets/moital/israel-sal`](https://data.gov.il/he/datasets/moital/israel-sal) | Reference-only branch/catalog input; transform it into the normalized import contract before use | It is a Carrefour program subset, not every Israeli chain, and the published branch rows do not provide coordinates required by nearby search without a separate permitted enrichment step. |
+| Ministry controlled/imported food datasets | Official open datasets for [controlled consumer prices](https://data.gov.il/he/datasets/moital/price_controlled_consumer_products) and [imported-food selling points](https://data.gov.il/he/datasets/moital/import_quotas) | Reference-price validation only; never used as retailer checkout prices | They do not provide a complete branch-level supermarket catalog or current per-branch price/promotions feed. |
 | Other chains | No source is promoted without current schema and permission evidence | Fixture branch metadata only; delivery handoff is manual | Use the adapter contract and add a fixture before production activation. |
 
 ## Catalog coverage contract
@@ -15,15 +17,53 @@ branch-level records so local development is deterministic. The catalog import
 helper (`web/lib/ingestion/catalog.ts`) accepts complete or incremental
 normalized price streams, keys records by retailer + branch + barcode/item id,
 keeps the latest duplicate, and reports malformed rows. A source with skipped
-rows must not replace a valid prior snapshot. The UI and product APIs expose
-this as fixture data and show the limitation instead of claiming complete live
-coverage.
+rows must not replace a valid prior snapshot. `importCatalogFromAdapter()` runs
+every discovered full-price document through that gate, while
+`loadConfiguredCatalog()` accepts a worker-published JSON snapshot through
+`CATALOG_SOURCE_URL`. A configured source is marked complete only when its
+scope declares Israel, version, as-of time, and matching record/product/branch
+counts; otherwise the result is visibly partial.
+
+The JSON snapshot contract is intentionally small and provider-neutral:
+
+```json
+{
+  "complete": true,
+  "completeness": {
+    "scope": {
+      "id": "retailer-2026-08-30",
+      "countryCode": "IL",
+      "sourceVersion": "2026-08-30",
+      "asOf": "2026-08-30T04:00:00Z",
+      "expectedRecordCount": 120000,
+      "expectedProductCount": 30000,
+      "expectedBranchCount": 120,
+      "expectedRetailers": ["example-retailer"]
+    }
+  },
+  "records": []
+}
+```
+
+The records are normalized `NormalizedPrice` values (including source,
+freshness, branch, barcode/item identity, availability, and optional image
+metadata). Arrays without a completeness scope remain importable for local
+work but are never presented as complete coverage.
+
+The current web request handlers still use the committed fixture `products`
+until a worker publishes a validated snapshot and the request layer is wired
+to select it. This scoped data-layer change makes that handoff explicit and
+safe; it does not claim that a complete external feed is currently available.
 
 Product images use stable Open Food Facts image URLs when a barcode is present.
 The browser preserves aspect ratio, reports Hebrew alt text, and falls back to
 an explicitly labelled branded placeholder when the source is missing or fails.
 Open Food Facts image attribution and reuse terms must be reviewed before a
-public launch; images are lazy-loaded and not copied into the repository.
+public launch; images are lazy-loaded and not copied into the repository. The
+app has no image service-worker or server-side cache: the browser may use the
+origin's normal HTTP cache headers, while each candidate retains its source URI
+and rights-review warning. A failed load is removed from the image slot and is
+never presented as a verified pack shot.
 
 Delivery data is capability metadata only: Shufersal is a partial handoff and
 Rami Levy/Victory are manual-list fallbacks. Delivery coverage and fees are not

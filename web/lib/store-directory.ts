@@ -235,6 +235,7 @@ export function storesFromDirectory(pricedStores: Store[], entries: readonly Sto
 }
 
 const directoryCache = new Map<string, { expiresAt: number; result: StoreDirectoryLoadResult }>();
+const directoryLastValid = new Map<string, StoreDirectoryLoadResult>();
 const directoryInflight = new Map<string, Promise<StoreDirectoryLoadResult>>();
 const directoryCacheTtlMs = 5 * 60 * 1000;
 const directoryFailureTtlMs = 30 * 1000;
@@ -377,12 +378,22 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
       const claim = sourceClaimsComplete(payload, entries);
       const limitations = claim.complete ? [] : ['מקור הסניפים חייב לספק scope עם countryCode=IL, מזהה scope, גרסה, תאריך asOf, expectedChains ו-expectedBranchCount התואם לרשומות הייחודיות; אחרת הוא מסומן חלקי.'];
       const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, claim.complete, claim.scope) };
+      directoryLastValid.set(endpoint, result);
       directoryCache.set(endpoint, { expiresAt: Date.now() + directoryCacheTtlMs, result });
       return result;
     } finally {
       clearTimeout(timeout);
     }
   } catch {
+    const previous = directoryLastValid.get(endpoint);
+    if (previous) {
+      const result = {
+        entries: previous.entries,
+        completeness: { ...previous.completeness, limitations: [...previous.completeness.limitations, 'מקור הסניפים החדש לא אומת; נשמר ה-snapshot התקין האחרון.'] },
+      };
+      directoryCache.set(endpoint, { expiresAt: Date.now() + directoryFailureTtlMs, result });
+      return result;
+    }
     const result = {
       entries: nationwideStoreDirectory,
       completeness: completenessFor(nationwideStoreDirectory, 'fixture', storeDirectoryCompleteness.lastVerified, [
@@ -395,11 +406,11 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
   }
 }
 
-export async function loadStoreDirectory(fetchImpl: typeof fetch = fetch): Promise<StoreDirectoryLoadResult> {
+export async function loadStoreDirectory(fetchImpl: typeof fetch = fetch, options: { forceRefresh?: boolean } = {}): Promise<StoreDirectoryLoadResult> {
   const endpoint = process.env.STORE_DIRECTORY_URL?.trim();
   if (!endpoint) return { entries: nationwideStoreDirectory, completeness: storeDirectoryCompleteness };
   const cached = directoryCache.get(endpoint);
-  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  if (!options.forceRefresh && cached && cached.expiresAt > Date.now()) return cached.result;
   const pending = directoryInflight.get(endpoint);
   if (pending) return pending;
   const request = fetchConfiguredDirectory(endpoint, fetchImpl);

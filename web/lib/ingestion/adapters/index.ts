@@ -13,3 +13,19 @@ export function createAdapterRegistry(options: { cerberus?: CerberusAdapterOptio
     ['shufersal', createShufersalAdapter(options.shufersal)],
   ]);
 }
+
+/**
+ * Build the production-shaped registry from environment configuration. The
+ * shared Cerberus endpoint still needs an injected FTP/TLS downloader when its
+ * listing is not exposed over HTTP; leaving the URL unset keeps local startup
+ * fixture-friendly instead of making a network dependency implicit.
+ */
+export function createConfiguredAdapterRegistry(env: NodeJS.ProcessEnv = process.env): Map<string, RetailerSourceAdapter> {
+  return createAdapterRegistry({
+    cerberus: {
+      listingUrl: env.CERBERUS_LISTING_URL?.trim() || undefined,
+      baseUrl: env.CERBERUS_FTP_HOST?.trim() ? `ftp://${env.CERBERUS_FTP_HOST.trim()}` : undefined,
+    },
+    shufersal: { listingUrl: env.SHUFERSAL_LISTING_URL?.trim() || undefined },
+  });
+}
