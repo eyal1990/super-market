@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { directoryImportIsSafe, importStoreDirectory, loadStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
+import { directoryImportIsSafe, importStoreDirectory, IRON_BRANCHES_DATASTORE_URL, israelGridToWgs84, loadStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
 import { stores } from '../lib/data.ts';
 import type { NormalizedStore } from '../lib/ingestion/types.ts';
 
@@ -15,6 +15,15 @@ test('the directory fixture spans Israel and is explicitly partial', () => {
   assert.ok(storeDirectoryCompleteness.districtCount >= 5);
   assert.equal(storeDirectoryCompleteness.coverageStatus, 'representative');
   assert.ok(storeDirectoryCompleteness.limitations.length > 0);
+  assert.ok(nationwideStoreDirectory.every((entry) => entry.status === 'active' && entry.verifiedAt === entry.lastVerified));
+});
+
+test('Israeli TM Grid coordinates are converted to WGS84 without accepting out-of-country results', () => {
+  const coordinates = israelGridToWgs84(178700, 665000);
+  assert.ok(coordinates);
+  assert.ok(coordinates.lat > 31 && coordinates.lat < 33);
+  assert.ok(coordinates.lon > 34 && coordinates.lon < 35.5);
+  assert.equal(israelGridToWgs84(1, 1), null);
 });
 
 test('directory imports validate Israel coordinates, deduplicate, and keep the last record', async () => {
@@ -109,4 +118,35 @@ test('a failed refresh preserves the last valid configured directory snapshot', 
   } finally {
     delete process.env.STORE_DIRECTORY_URL;
   }
+});
+
+test('Iron Branches CKAN/DataStore rows are imported from ITM as an explicitly partial emergency subset', async () => {
+  process.env.STORE_DIRECTORY_URL = IRON_BRANCHES_DATASTORE_URL;
+  try {
+    const result = await loadStoreDirectory(async () => new Response(JSON.stringify({ success: true, result: {
+      records: [{ chain: 'רשת בדיקה', branch: 'סניף חירום', city: 'תל אביב-יפו', street: 'אבן גבירול', address: 'אבן גבירול 124', X: '178700', Y: '665000', report_date: '2026-08-20' }],
+      total: 1,
+      last_modified: '2026-08-20T00:00:00Z',
+    } }), { status: 200 }), { forceRefresh: true });
+    const entry = result.entries[0]!;
+    assert.equal(result.completeness.dataset, 'configured-source');
+    assert.equal(result.completeness.coverageStatus, 'configured-partial');
+    assert.equal(entry.status, 'emergency-open');
+    assert.equal(entry.source, IRON_BRANCHES_DATASTORE_URL);
+    assert.equal(entry.verifiedAt, '2026-08-20T00:00:00.000Z');
+    assert.ok(entry.coordinates.lat > 31 && entry.coordinates.lon > 34);
+    assert.match(result.completeness.limitations.join(' '), /emergency-open subset/);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URL;
+  }
+});
+
+test('incremental directory refresh is idempotent and preserves prior branches', async () => {
+  const first = await importStoreDirectory((async function* () { yield record({ storeId: '001' }); })(), { mode: 'full' });
+  const delta = record({ storeId: '002', name: 'סניף נוסף', source: { ...source, sourceFileId: 'stores-incremental', publishedAt: '2026-08-31T08:00:00Z' } });
+  const once = await importStoreDirectory((async function* () { yield delta; })(), { mode: 'incremental', previous: first.records });
+  const twice = await importStoreDirectory((async function* () { yield delta; })(), { mode: 'incremental', previous: once.records });
+  assert.equal(once.published, true);
+  assert.deepEqual(twice.records, once.records);
+  assert.deepEqual(twice.records.map((item) => item.storeId), ['001', '002']);
 });

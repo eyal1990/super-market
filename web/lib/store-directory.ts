@@ -13,8 +13,10 @@ export type StoreDirectoryEntry = {
   postalCode?: string;
   coordinates: { lat: number; lon: number };
   isActive: boolean;
+  status: 'active' | 'inactive' | 'temporarily-closed' | 'emergency-open' | 'unknown';
   source: string;
   lastVerified: string;
+  verifiedAt: string;
   deliveryCapability: Store['delivery']['capability'];
   retailerUrl?: string;
   openNow: boolean | null;
@@ -49,12 +51,51 @@ export type StoreDirectoryCompleteness = {
   lastVerified: string;
   scope: StoreDirectoryScope;
   limitations: string[];
+  warnings: string[];
+  sourceState: 'fixture' | 'live' | 'stale-fallback';
+  refreshAttempted: boolean;
 };
 
 export type StoreDirectoryLoadResult = {
   entries: StoreDirectoryEntry[];
   completeness: StoreDirectoryCompleteness;
 };
+
+export type StoreDirectorySourceContract = {
+  version: '1';
+  format: 'ckan-datastore-json' | 'normalized-json';
+  recordPath: string;
+  requiredRecordFields: readonly string[];
+  coordinateSystems: readonly string[];
+  completenessRule: string;
+};
+
+/**
+ * The only payload contract accepted by the server-side directory loader.
+ * A source can be useful without being a claim of nationwide coverage; the
+ * completeness manifest is deliberately separate from the row schema.
+ */
+export const storeDirectorySourceContract: StoreDirectorySourceContract = {
+  version: '1',
+  format: 'ckan-datastore-json',
+  recordPath: 'result.records[] (or stores[]/records[]/branches[])',
+  requiredRecordFields: ['retailerId or chain', 'storeId or branch id', 'name or branch', 'address', 'city', 'latitude/longitude or ITM X/Y', 'source/lastVerified or source timestamp'],
+  coordinateSystems: ['WGS84 latitude/longitude', 'EPSG:2039 / Israeli TM Grid (ITM) X/Y'],
+  completenessRule: 'Only an explicit IL scope manifest with expectedBranchCount and expectedChains can be complete-for-scope; a source without that manifest remains partial.',
+};
+
+export const IRON_BRANCHES_RESOURCE_ID = 'f7d9c47e-3414-4524-a187-a0f0e057b08a';
+export const IRON_BRANCHES_SOURCE_URL = `https://data.gov.il/he/datasets/moital/iron-branches/${IRON_BRANCHES_RESOURCE_ID}`;
+export const IRON_BRANCHES_DATASTORE_URL = `https://data.gov.il/api/3/action/datastore_search?resource_id=${IRON_BRANCHES_RESOURCE_ID}`;
+
+/** Public sources investigated for this directory; none is a complete cross-chain inventory. */
+export const officialDirectorySources = [
+  { id: 'iron-branches', authority: 'Israel Ministry of Economy and Industry', url: IRON_BRANCHES_SOURCE_URL, format: 'CSV / CKAN DataStore JSON', coverage: 'emergency-branch subset; partial', coordinateSystem: 'EPSG:2039 / ITM X/Y' },
+  { id: 'israel-basket', authority: 'Israel Ministry of Economy and Industry', url: 'https://data.gov.il/he/datasets/moital/israel-sal', format: 'CSV / CKAN DataStore JSON', coverage: 'participating Israel Basket branches; partial', coordinateSystem: 'address only' },
+  { id: 'rami-levy-branches', authority: 'Rami Levy', url: 'https://tav.rami-levy.co.il/branches/', format: 'official HTML', coverage: 'single chain; coordinates not supplied in the public listing' },
+  { id: 'victory-branches', authority: 'Victory', url: 'https://victory.co.il/branches/', format: 'official HTML', coverage: 'single chain; coordinates not supplied in the public listing' },
+  { id: 'shufersal-branches', authority: 'Shufersal', url: 'https://media.shufersal.co.il/policy/ShufersalBranchesOnSaturdayEveningsV3.pdf', format: 'official PDF', coverage: 'operational subset; coordinates not supplied' },
+] as const;
 
 const israelBounds = { minLat: 29.45, maxLat: 33.35, minLon: 34.15, maxLon: 35.95 };
 
@@ -64,7 +105,7 @@ const israelBounds = { minLat: 29.45, maxLat: 33.35, minLon: 34.15, maxLon: 35.9
  * Existing priced branches are kept as the first three records so the local
  * shopping fixture remains useful while the directory spans all districts.
  */
-export const nationwideStoreDirectory: StoreDirectoryEntry[] = [
+const representativeStoreDirectorySeed: Array<Omit<StoreDirectoryEntry, 'status' | 'verifiedAt'>> = [
   { retailerId: 'shufersal', storeId: 'shufersal-avenue', chainId: 'shufersal', chainName: 'שופרסל', name: 'דיל · אבן גבירול', address: 'אבן גבירול 124', city: 'תל אביב-יפו', district: 'תל אביב', coordinates: { lat: 32.086, lon: 34.783 }, isActive: true, lastVerified: '2026-08-30', source: 'fixture', deliveryCapability: 'partial', openNow: true },
   { retailerId: 'rami-levy', storeId: 'rami-levy-azrieli', chainId: 'rami-levy', chainName: 'רמי לוי', name: 'מגדלי תל אביב', address: 'דרך מנחם בגין 132', city: 'תל אביב-יפו', district: 'תל אביב', coordinates: { lat: 32.074, lon: 34.79 }, isActive: true, source: 'fixture', lastVerified: '2026-08-30', deliveryCapability: 'manual', openNow: true },
   { retailerId: 'victory', storeId: 'victory-yh', chainId: 'victory', chainName: 'ויקטורי', name: 'יהודה המכבי', address: 'יהודה המכבי 42', city: 'תל אביב-יפו', district: 'תל אביב', coordinates: { lat: 32.094, lon: 34.793 }, isActive: true, source: 'fixture', lastVerified: '2026-08-30', deliveryCapability: 'manual', openNow: true },
@@ -84,6 +125,12 @@ export const nationwideStoreDirectory: StoreDirectoryEntry[] = [
   { retailerId: 'victory', storeId: 'victory-modiin', chainId: 'victory', chainName: 'ויקטורי', name: 'מודיעין', address: 'דם המכבים 36', city: 'מודיעין-מכבים-רעות', district: 'מרכז', coordinates: { lat: 31.9, lon: 35.01 }, isActive: true, source: 'fixture', lastVerified: '2026-08-30', deliveryCapability: 'unsupported', openNow: true },
 ];
 
+export const nationwideStoreDirectory: StoreDirectoryEntry[] = representativeStoreDirectorySeed.map((entry) => ({
+  ...entry,
+  status: entry.isActive ? 'active' : 'inactive',
+  verifiedAt: entry.lastVerified,
+}));
+
 export const storeDirectoryCompleteness: StoreDirectoryCompleteness = {
   dataset: 'fixture' as const,
   coverageStatus: 'representative' as const,
@@ -94,9 +141,12 @@ export const storeDirectoryCompleteness: StoreDirectoryCompleteness = {
   lastVerified: '2026-08-30',
   scope: { id: 'development-representative-fixture', countryCode: 'IL', expectedChains: ['rami-levy', 'shufersal', 'victory'], sourceVersion: 'fixture-2026-08-30', asOf: '2026-08-30' },
   limitations: ['המאגר מייצג סניפים מכל מחוז לצורכי פיתוח ואינו רשימת סניפים חיה או מלאה. יש להחליף אותו בייצוא רשמי מאומת לפני השקה ארצית.'],
+  warnings: [],
+  sourceState: 'fixture',
+  refreshAttempted: false,
 };
 
-function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'configured-source', lastVerified: string, limitations: string[], complete = false, scope: StoreDirectoryScope = source === 'fixture' ? storeDirectoryCompleteness.scope : { id: 'configured-source', countryCode: 'IL', expectedChains: [...new Set(entries.map((entry) => entry.chainId))] }): StoreDirectoryCompleteness {
+function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'configured-source', lastVerified: string, limitations: string[], complete = false, scope: StoreDirectoryScope = source === 'fixture' ? storeDirectoryCompleteness.scope : { id: 'configured-source', countryCode: 'IL', expectedChains: [...new Set(entries.map((entry) => entry.chainId))] }, options: { warnings?: string[]; sourceState?: StoreDirectoryCompleteness['sourceState']; refreshAttempted?: boolean } = {}): StoreDirectoryCompleteness {
   return {
     dataset: source,
     coverageStatus: source === 'fixture' ? 'representative' : complete ? 'configured-complete-for-scope' : 'configured-partial',
@@ -107,6 +157,9 @@ function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'co
     lastVerified,
     scope,
     limitations,
+    warnings: options.warnings ?? [],
+    sourceState: options.sourceState ?? (source === 'fixture' ? 'fixture' : 'live'),
+    refreshAttempted: options.refreshAttempted ?? source === 'configured-source',
   };
 }
 
@@ -240,49 +293,123 @@ const directoryInflight = new Map<string, Promise<StoreDirectoryLoadResult>>();
 const directoryCacheTtlMs = 5 * 60 * 1000;
 const directoryFailureTtlMs = 30 * 1000;
 const directoryFetchTimeoutMs = 10_000;
+const directoryMaxResponseBytes = 20 * 1024 * 1024;
 
-function sourceMetadata(retailerId: string, source: unknown, lastVerified?: unknown) {
+/** Convert EPSG:2039 (Israeli TM Grid) easting/northing to WGS84. */
+export function israelGridToWgs84(easting: number, northing: number): { lat: number; lon: number } | null {
+  if (!Number.isFinite(easting) || !Number.isFinite(northing) || easting < 100_000 || easting > 350_000 || northing < 0 || northing > 900_000) return null;
+  const a = 6378137;
+  const inverseFlattening = 298.257222101;
+  const f = 1 / inverseFlattening;
+  const eccentricitySquared = f * (2 - f);
+  const secondEccentricitySquared = eccentricitySquared / (1 - eccentricitySquared);
+  const scale = 1.0000067;
+  const latitudeOfOrigin = 31.7343936111111 * Math.PI / 180;
+  const centralMeridian = 35.2045169444444 * Math.PI / 180;
+  const falseEasting = 219529.584;
+  const falseNorthing = 626907.39;
+  const meridionalArc = (latitude: number) => a * ((1 - eccentricitySquared / 4 - 3 * eccentricitySquared ** 2 / 64 - 5 * eccentricitySquared ** 3 / 256) * latitude
+    - (3 * eccentricitySquared / 8 + 3 * eccentricitySquared ** 2 / 32 + 45 * eccentricitySquared ** 3 / 1024) * Math.sin(2 * latitude)
+    + (15 * eccentricitySquared ** 2 / 256 + 45 * eccentricitySquared ** 3 / 1024) * Math.sin(4 * latitude)
+    - (35 * eccentricitySquared ** 3 / 3072) * Math.sin(6 * latitude));
+  const meridian = meridionalArc(latitudeOfOrigin) + (northing - falseNorthing) / scale;
+  const mu = meridian / (a * (1 - eccentricitySquared / 4 - 3 * eccentricitySquared ** 2 / 64 - 5 * eccentricitySquared ** 3 / 256));
+  const footpoint = mu
+    + (3 * (eccentricitySquared / (1 - eccentricitySquared)) / 2 - 27 * (eccentricitySquared / (1 - eccentricitySquared)) ** 3 / 32) * Math.sin(2 * mu)
+    + (21 * (eccentricitySquared / (1 - eccentricitySquared)) ** 2 / 16 - 55 * (eccentricitySquared / (1 - eccentricitySquared)) ** 4 / 32) * Math.sin(4 * mu)
+    + (151 * (eccentricitySquared / (1 - eccentricitySquared)) ** 3 / 96) * Math.sin(6 * mu);
+  const sinFootpoint = Math.sin(footpoint);
+  const cosFootpoint = Math.cos(footpoint);
+  const tangentSquared = Math.tan(footpoint) ** 2;
+  const radiusPrimeVertical = a / Math.sqrt(1 - eccentricitySquared * sinFootpoint ** 2);
+  const radiusMeridian = a * (1 - eccentricitySquared) / (1 - eccentricitySquared * sinFootpoint ** 2) ** 1.5;
+  const c = secondEccentricitySquared * cosFootpoint ** 2;
+  const d = (easting - falseEasting) / (radiusPrimeVertical * scale);
+  const latitude = footpoint - (radiusPrimeVertical * Math.tan(footpoint) / radiusMeridian) * (d ** 2 / 2 - (5 + 3 * tangentSquared + 10 * c - 4 * c ** 2 - 9 * secondEccentricitySquared) * d ** 4 / 24 + (61 + 90 * tangentSquared + 298 * c + 45 * tangentSquared ** 2 - 252 * secondEccentricitySquared - 3 * c ** 2) * d ** 6 / 720);
+  const longitude = centralMeridian + (d - (1 + 2 * tangentSquared + c) * d ** 3 / 6 + (5 - 2 * c + 28 * tangentSquared - 3 * c ** 2 + 8 * secondEccentricitySquared + 24 * tangentSquared ** 2) * d ** 5 / 120) / cosFootpoint;
+  const result = { lat: latitude * 180 / Math.PI, lon: longitude * 180 / Math.PI };
+  return validCoordinate(result.lat, result.lon) ? result : null;
+}
+
+function parseTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const dayMonthYear = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  const parsed = dayMonthYear ? new Date(Date.UTC(Number(dayMonthYear[3]), Number(dayMonthYear[2]) - 1, Number(dayMonthYear[1]))) : new Date(raw);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
+function numericValue(input: unknown): number | null {
+  const value = typeof input === 'number' ? input : typeof input === 'string' && input.trim() ? Number(input.replaceAll(',', '').trim()) : Number.NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
+function directoryStatus(input: unknown, isActive: boolean | undefined, emergencySource: boolean): StoreDirectoryEntry['status'] {
+  const value = typeof input === 'string' ? input.trim().toLocaleLowerCase('he-IL') : '';
+  if (emergencySource) return 'emergency-open';
+  if (/inactive|closed|סגור|לא פעיל/.test(value)) return 'inactive';
+  if (/temporary|temporarily|שיפוץ|זמני/.test(value)) return 'temporarily-closed';
+  if (isActive === false) return 'inactive';
+  if (value) return 'active';
+  return isActive === true ? 'active' : 'unknown';
+}
+
+class DirectorySourceValidationError extends Error {
+  readonly warningList: string[];
+
+  constructor(warningList: string[]) {
+    super('directory source failed validation');
+    this.warningList = warningList;
+  }
+}
+
+function sourceMetadata(retailerId: string, source: unknown, lastVerified: string, downloadedAt = lastVerified) {
   if (source && typeof source === 'object') {
     const value = source as Record<string, unknown>;
     if (typeof value.sourceUri === 'string' && typeof value.downloadedAt === 'string') return source as NormalizedStore['source'];
   }
-  const verified = typeof lastVerified === 'string' ? lastVerified : new Date().toISOString();
-  return { retailerId, adapterId: 'configured-directory', sourceFileId: 'configured-directory', sourceUri: typeof source === 'string' ? source : 'configured://directory', fileName: 'directory.json', documentKind: 'stores' as const, publishedAt: verified, downloadedAt: verified, checksum: 'runtime-source' };
+  return { retailerId, adapterId: 'configured-directory', sourceFileId: 'configured-directory', sourceUri: typeof source === 'string' ? source : 'configured://directory', fileName: 'directory.json', documentKind: 'stores' as const, publishedAt: lastVerified, downloadedAt, checksum: 'runtime-source' };
 }
 
-function normalizedExternalRecord(raw: unknown): NormalizedStore | null {
+function normalizedExternalRecord(raw: unknown, context: { endpoint: string; verifiedAt?: string; downloadedAt?: string } = { endpoint: 'configured://directory' }): NormalizedStore | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
   const coordinates = value.coordinates && typeof value.coordinates === 'object' ? value.coordinates as Record<string, unknown> : undefined;
-  const retailerId = typeof value.retailerId === 'string' ? value.retailerId : typeof value.chainId === 'string' ? value.chainId : null;
-  const storeId = typeof value.storeId === 'string' ? value.storeId : typeof value.id === 'string' ? value.id : null;
+  const emergencySource = context.endpoint.includes(IRON_BRANCHES_RESOURCE_ID) || context.endpoint.includes('iron-branches');
+  const chain = typeof value.retailerId === 'string' ? value.retailerId : typeof value.chainId === 'string' ? value.chainId : typeof value.chain === 'string' ? value.chain : typeof value.network === 'string' ? value.network : null;
+  const retailerId = chain?.trim() || null;
+  const explicitStoreId = typeof value.storeId === 'string' ? value.storeId : typeof value.id === 'string' ? value.id : typeof value.branchId === 'string' ? value.branchId : typeof value.branch_id === 'string' ? value.branch_id : null;
   const name = typeof value.name === 'string' ? value.name : typeof value.branch === 'string' ? value.branch : null;
-  const numeric = (input: unknown) => {
-    const result = typeof input === 'number' ? input : typeof input === 'string' && input.trim() ? Number(input) : Number.NaN;
-    return Number.isFinite(result) ? result : null;
-  };
-  const latitude = numeric(value.latitude ?? coordinates?.lat);
-  const longitude = numeric(value.longitude ?? coordinates?.lon);
+  const easting = numericValue(value.x ?? value.X ?? value.easting ?? coordinates?.x);
+  const northing = numericValue(value.y ?? value.Y ?? value.northing ?? coordinates?.y);
+  const converted = easting !== null && northing !== null ? israelGridToWgs84(easting, northing) : null;
+  const latitude = numericValue(value.latitude ?? value.lat ?? coordinates?.lat) ?? converted?.lat ?? null;
+  const longitude = numericValue(value.longitude ?? value.lon ?? value.lng ?? coordinates?.lon) ?? converted?.lon ?? null;
   const address = typeof value.address === 'string' ? value.address.trim() : undefined;
+  const street = typeof value.street === 'string' ? value.street.trim() : '';
   const city = typeof value.city === 'string' ? value.city.trim() : undefined;
-  if (!retailerId || !storeId || !name || !address || !city || latitude === null || longitude === null) return null;
+  const resolvedAddress = address || (street && city ? `${street}, ${city}` : undefined);
+  const verifiedAt = parseTimestamp(value.lastVerified ?? value.verifiedAt ?? value.report_date ?? value.reportDate ?? (value.source && typeof value.source === 'object' ? (value.source as Record<string, unknown>).publishedAt ?? (value.source as Record<string, unknown>).downloadedAt : undefined) ?? context.verifiedAt);
+  const storeId = explicitStoreId?.trim() || (retailerId && name && resolvedAddress ? `${retailerId}:${name}:${resolvedAddress}`.toLocaleLowerCase('en-US').replace(/[^a-z0-9א-ת:]+/gi, '-') : null);
+  if (!retailerId || !storeId || !name?.trim() || !resolvedAddress || !city || latitude === null || longitude === null || !verifiedAt) return null;
   return {
     retailerId,
     storeId,
     chainId: typeof value.chainId === 'string' ? value.chainId : retailerId,
-    chainName: typeof value.chainName === 'string' ? value.chainName : undefined,
-    name,
-    address,
+    chainName: typeof value.chainName === 'string' ? value.chainName : typeof value.chain === 'string' ? value.chain : undefined,
+    name: name.trim(),
+    address: resolvedAddress,
     city,
     district: typeof value.district === 'string' ? value.district.trim() : undefined,
     postalCode: typeof value.postalCode === 'string' ? value.postalCode : undefined,
     latitude,
     longitude,
-    isActive: value.isActive !== false,
+    isActive: value.isActive !== false && directoryStatus(value.status, typeof value.isActive === 'boolean' ? value.isActive : undefined, emergencySource) !== 'inactive',
     openNow: typeof value.openNow === 'boolean' ? value.openNow : null,
     deliveryCapability: value.deliveryCapability === 'deep_link' || value.deliveryCapability === 'partial' || value.deliveryCapability === 'manual' || value.deliveryCapability === 'unsupported' ? value.deliveryCapability : undefined,
     retailerUrl: typeof value.retailerUrl === 'string' ? value.retailerUrl : undefined,
-    source: sourceMetadata(retailerId, value.source, value.lastVerified),
+    source: sourceMetadata(retailerId, value.source ?? context.endpoint, verifiedAt, context.downloadedAt ?? verifiedAt),
   };
 }
 
@@ -301,8 +428,10 @@ function directoryEntryFromRecord(record: NormalizedStore): StoreDirectoryEntry 
     postalCode: record.postalCode,
     coordinates: { lat: record.latitude!, lon: record.longitude! },
     isActive: record.isActive !== false,
+    status: directoryStatus(undefined, record.isActive, source.sourceUri.includes(IRON_BRANCHES_RESOURCE_ID) || source.sourceUri.includes('iron-branches')),
     source: source.sourceUri,
     lastVerified,
+    verifiedAt: lastVerified,
     deliveryCapability: record.deliveryCapability ?? 'unsupported',
     retailerUrl: record.retailerUrl,
     openNow: record.openNow ?? null,
@@ -352,45 +481,77 @@ function sourceClaimsComplete(payload: unknown, entries: readonly StoreDirectory
   return { complete, scope };
 }
 
+function sourceTimestamp(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const root = payload as Record<string, unknown>;
+  const result = root.result && typeof root.result === 'object' ? root.result as Record<string, unknown> : undefined;
+  return parseTimestamp(root.last_modified ?? root.lastModified ?? root.updatedAt ?? result?.last_modified ?? result?.lastModified ?? result?.updatedAt) ?? undefined;
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > directoryMaxResponseBytes) throw new Error('directory source response exceeds size limit');
+  const body = await response.text();
+  if (new TextEncoder().encode(body).byteLength > directoryMaxResponseBytes) throw new Error('directory source response exceeds size limit');
+  return JSON.parse(body) as unknown;
+}
+
 /**
  * Load a complete branch snapshot from a provider-neutral JSON endpoint. The
  * endpoint is server-side only; failures and unsafe snapshots keep the local
  * fixture available and visibly marked as such.
  */
 async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetch): Promise<StoreDirectoryLoadResult> {
+  const refreshWarnings: string[] = [];
   try {
+    const parsedEndpoint = new URL(endpoint);
+    if (parsedEndpoint.protocol !== 'https:' && parsedEndpoint.protocol !== 'http:') throw new Error('directory source URL must use HTTP(S)');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), directoryFetchTimeoutMs);
     try {
       const response = await fetchImpl(endpoint, { headers: { accept: 'application/json' }, signal: controller.signal });
       if (!response.ok) throw new Error(`directory source returned ${response.status}`);
-      const payload = await response.json() as unknown;
+      const payload = await readBoundedJson(response);
       const rawRecords = externalRecords(payload);
       const normalized: NormalizedStore[] = [];
       let invalidCount = 0;
-      rawRecords.forEach((raw) => {
-        const record = normalizedExternalRecord(raw);
-        if (record) normalized.push(record); else invalidCount += 1;
+      const downloadedAt = new Date().toISOString();
+      const verifiedAt = sourceTimestamp(payload);
+      rawRecords.forEach((raw, index) => {
+        const record = normalizedExternalRecord(raw, { endpoint, verifiedAt, downloadedAt });
+        if (record) normalized.push(record); else {
+          invalidCount += 1;
+          refreshWarnings.push(`directory row ${index + 1} is malformed or lacks authoritative coordinates/timestamp`);
+        }
       });
       const imported = await importStoreDirectory((async function* () { yield* normalized; })());
-      if (!rawRecords.length || invalidCount > 0 || !directoryImportIsSafe(imported)) throw new Error('directory source failed validation');
+      refreshWarnings.push(...imported.warnings);
+      if (!rawRecords.length) refreshWarnings.push('directory source returned no records');
+      if (!rawRecords.length || invalidCount > 0 || !directoryImportIsSafe(imported)) throw new DirectorySourceValidationError(refreshWarnings);
       const entries = imported.records.map(directoryEntryFromRecord);
       const claim = sourceClaimsComplete(payload, entries);
-      const limitations = claim.complete ? [] : ['מקור הסניפים חייב לספק scope עם countryCode=IL, מזהה scope, גרסה, תאריך asOf, expectedChains ו-expectedBranchCount התואם לרשומות הייחודיות; אחרת הוא מסומן חלקי.'];
-      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, claim.complete, claim.scope) };
+      const emergencySource = endpoint.includes(IRON_BRANCHES_RESOURCE_ID) || endpoint.includes('iron-branches');
+      const sourceLimitations = [
+        ...(claim.complete ? [] : ['configured source is partial unless its IL scope manifest declares matching expectedChains and expectedBranchCount']),
+        ...(emergencySource ? ['Iron Branches is an emergency-open subset, not a complete Israeli supermarket inventory.'] : []),
+      ];
+      const lastVerified = sourceTimestamp(payload) ?? entries.map((entry) => entry.lastVerified).sort().at(-1) ?? downloadedAt;
+      const result = { entries, completeness: completenessFor(entries, 'configured-source', lastVerified, sourceLimitations, claim.complete, claim.scope, { warnings: refreshWarnings, sourceState: 'live', refreshAttempted: true }) };
       directoryLastValid.set(endpoint, result);
       directoryCache.set(endpoint, { expiresAt: Date.now() + directoryCacheTtlMs, result });
       return result;
     } finally {
       clearTimeout(timeout);
     }
-  } catch {
+  } catch (error) {
+    const warnings = error instanceof DirectorySourceValidationError ? error.warningList : [`directory source refresh failed: ${error instanceof Error ? error.message : 'unknown error'}`];
     const previous = directoryLastValid.get(endpoint);
     if (previous) {
       const result = {
         entries: previous.entries,
         completeness: { ...previous.completeness, limitations: [...previous.completeness.limitations, 'מקור הסניפים החדש לא אומת; נשמר ה-snapshot התקין האחרון.'] },
       };
+      result.completeness = { ...result.completeness, warnings: [...result.completeness.warnings, ...warnings], sourceState: 'stale-fallback', refreshAttempted: true };
       directoryCache.set(endpoint, { expiresAt: Date.now() + directoryFailureTtlMs, result });
       return result;
     }
@@ -401,6 +562,7 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
         'מקור הסניפים שהוגדר לא זמין או נכשל בבדיקת תקינות; מוצגת תמונת fixture אחרונה.',
       ]),
     };
+    result.completeness = { ...result.completeness, warnings, sourceState: 'stale-fallback', refreshAttempted: true };
     directoryCache.set(endpoint, { expiresAt: Date.now() + directoryFailureTtlMs, result });
     return result;
   }

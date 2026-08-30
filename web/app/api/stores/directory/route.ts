@@ -10,7 +10,8 @@ export async function GET(request: Request) {
   const chain = url.searchParams.get('chain')?.trim().toLocaleLowerCase('en-US');
   const page = Math.max(1, Number.parseInt(url.searchParams.get('page') ?? '1', 10) || 1);
   const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get('pageSize') ?? '50', 10) || 50));
-  const directory = await loadStoreDirectory();
+  const refresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
+  const directory = await loadStoreDirectory(fetch, { forceRefresh: refresh });
   const filtered = directory.entries.filter((entry) => entry.isActive)
     .filter((entry) => !city || entry.city.toLocaleLowerCase('he-IL') === city)
     .filter((entry) => !chain || entry.chainId.toLocaleLowerCase('en-US') === chain);
@@ -22,5 +23,6 @@ export async function GET(request: Request) {
     total: filtered.length,
     hasMore: start + pageSize < filtered.length,
     completeness: directory.completeness,
+    warnings: directory.completeness.warnings,
   }, { headers: { 'cache-control': 'no-store' } });
 }

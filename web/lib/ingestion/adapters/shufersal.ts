@@ -27,6 +27,8 @@ export const shufersalDiscoveryMetadata: AdapterDiscoveryMetadata = {
 
 export interface ShufersalAdapterOptions {
   listingUrl?: string;
+  /** Maximum number of paginated transparency pages to inspect per run. */
+  maxListingPages?: number;
   fetchImpl?: typeof fetch;
   listFiles?: (input: DiscoveryInput) => Promise<SourceFile[]>;
   download?: (file: SourceFile, signal?: AbortSignal) => Promise<DownloadedSourceFile>;
@@ -62,6 +64,17 @@ function listingFiles(listing: string, baseUrl: string): SourceFile[] {
   return [...new Map(files.map((file) => [file.id, file])).values()];
 }
 
+function listingPageLinks(listing: string, baseUrl: string): string[] {
+  const base = new URL(baseUrl);
+  return [...listing.matchAll(/href\s*=\s*["']([^"']+)["']/gi)]
+    .map((match) => {
+      try { return new URL(match[1]!, base); } catch { return undefined; }
+    })
+    .filter((url): url is URL => url !== undefined)
+    .filter((url) => url.origin === base.origin && /(?:^|[?&])page=\d+/i.test(url.search) && !/(?:\.gz|\.xml)$/i.test(url.pathname))
+    .map((url) => url.toString());
+}
+
 export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): RetailerSourceAdapter {
   return {
     retailerId: 'shufersal',
@@ -69,9 +82,21 @@ export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): R
     async discoverFiles(input) {
       if (options.listFiles) return await options.listFiles(input);
       if (!options.listingUrl) throw new IngestionError('Shufersal discovery needs listFiles or listingUrl', 'DISCOVERY_NOT_CONFIGURED');
-      const response = await fetchWithRetry(options.listingUrl, { signal: input.signal }, undefined, options.fetchImpl ?? fetch);
-      if (!response.ok) throw new IngestionError(`Shufersal listing returned HTTP ${response.status}`, `HTTP_${response.status}`, response.status >= 500);
-      const files = listingFiles(await response.text(), options.listingUrl);
+      const maxPages = Math.max(1, Math.min(500, options.maxListingPages ?? 100));
+      const pending = [options.listingUrl];
+      const visited = new Set<string>();
+      const discovered = new Map<string, SourceFile>();
+      while (pending.length && visited.size < maxPages) {
+        const pageUrl = pending.shift()!;
+        if (visited.has(pageUrl)) continue;
+        visited.add(pageUrl);
+        const response = await fetchWithRetry(pageUrl, { signal: input.signal }, undefined, options.fetchImpl ?? fetch);
+        if (!response.ok) throw new IngestionError(`Shufersal listing returned HTTP ${response.status}`, `HTTP_${response.status}`, response.status >= 500);
+        const listing = await response.text();
+        for (const file of listingFiles(listing, pageUrl)) discovered.set(file.id, file);
+        for (const link of listingPageLinks(listing, pageUrl)) if (!visited.has(link) && !pending.includes(link)) pending.push(link);
+      }
+      const files = [...discovered.values()];
       const kinds = input.documentKinds ? new Set(input.documentKinds) : undefined;
       return files.filter((file) => !kinds || kinds.has(file.documentKind));
     },

@@ -15,8 +15,9 @@ export async function GET(request: Request) {
   const directory = await loadStoreDirectory();
   const nearby = rankNearbyStores(storesFromDirectory(stores, directory.entries), lat, lon, radius, mode);
   const outOfCoverage = nearby.length === 0;
+  const fixtureFallback = directory.completeness.dataset === 'fixture';
   const selected = nearby.map((store) => ({ ...store, distance: formatDistance(store.distanceKm) }));
-  return NextResponse.json({ stores: selected, radiusKm: radius, fallbackUsed: false, outOfCoverage, mode, directory: directory.completeness, limitations: [
+  return NextResponse.json({ stores: selected, radiusKm: radius, fallbackUsed: fixtureFallback, outOfCoverage, mode, directory: directory.completeness, warnings: directory.completeness.warnings, limitations: [
     ...(mode === 'delivery' ? ['כיסוי משלוח ודמי משלוח לא אומתו בנתוני הדוגמה.'] : []),
     ...directory.completeness.limitations,
   ] }, { headers: { 'cache-control': 'no-store' } });
