@@ -166,10 +166,10 @@ export function normalizeSearch(value: string) {
     .replace(/[״”“'`.,/\\-]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-export function searchProducts(query: string) {
+export function searchProducts(query: string, catalogProducts: readonly Product[] = products) {
   const q = normalizeSearch(query);
-  if (!q) return products;
-  return products.filter((p) => normalizeSearch(`${p.name} ${p.brand} ${p.category} ${p.barcode} ${p.aliases.join(' ')}`).includes(q));
+  if (!q) return [...catalogProducts];
+  return catalogProducts.filter((p) => normalizeSearch(`${p.name} ${p.brand} ${p.category} ${p.barcode} ${p.aliases.join(' ')}`).includes(q));
 }
 
 export function getPrice(product: Product, storeId: string) {
@@ -199,9 +199,9 @@ export function calculateLine(product: Product, storeId: string, quantity: numbe
   };
 }
 
-export function calculateBasket(items: Record<string, number>, storeId: string) {
+export function calculateBasket(items: Record<string, number>, storeId: string, catalogProducts: readonly Product[] = products) {
   const lines = Object.entries(items).map(([id, quantity]) => {
-    const product = products.find((p) => p.id === id);
+    const product = catalogProducts.find((p) => p.id === id);
     const safeQuantity = Number.isInteger(quantity) ? Math.max(0, Math.min(99, quantity)) : 0;
     return product && safeQuantity > 0 ? { product, quantity: safeQuantity, calculation: calculateLine(product, storeId, safeQuantity) } : null;
   }).filter((line): line is { product: Product; quantity: number; calculation: ReturnType<typeof calculateLine> } => Boolean(line));

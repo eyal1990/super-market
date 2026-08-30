@@ -61,8 +61,8 @@ export type CatalogBranchCoverage = {
 };
 
 export function getCatalogBranchCoverage(
-  catalogProducts: Product[] = products,
-  catalogStores: Store[] = stores,
+  catalogProducts: readonly Product[] = products,
+  catalogStores: readonly Store[] = stores,
   now = new Date(),
 ): CatalogBranchCoverage[] {
   return catalogStores.map((store) => {
@@ -132,7 +132,7 @@ export type BasketValidation =
   | { valid: true; basket: Basket }
   | { valid: false; issues: BasketIssue[] };
 
-export function validateBasketItemsDetailed(items: unknown, allowEmpty = false): BasketValidation {
+export function validateBasketItemsDetailed(items: unknown, allowEmpty = false, catalogProducts: readonly Product[] = products): BasketValidation {
   if (!items || typeof items !== 'object' || Array.isArray(items)) return { valid: false, issues: [{ code: 'invalid_shape' }] };
   const entries = Object.entries(items);
   if (!entries.length && !allowEmpty) return { valid: false, issues: [{ code: 'empty' }] };
@@ -140,7 +140,7 @@ export function validateBasketItemsDetailed(items: unknown, allowEmpty = false):
   const safe: Basket = {};
   const issues: BasketIssue[] = [];
   for (const [id, quantity] of entries) {
-    if (!products.some((product) => product.id === id)) issues.push({ code: 'unknown_product', productId: id });
+    if (!catalogProducts.some((product) => product.id === id)) issues.push({ code: 'unknown_product', productId: id });
     else if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) issues.push({ code: 'invalid_quantity', productId: id });
     else safe[id] = quantity;
   }
@@ -162,23 +162,23 @@ export type DeliveryHandoff = {
   privacy: { destinationIncluded: false; exactAddressLogged: false };
 };
 
-export function validateBasketItems(items: unknown): Basket | null {
-  const result = validateBasketItemsDetailed(items);
+export function validateBasketItems(items: unknown, catalogProducts: readonly Product[] = products): Basket | null {
+  const result = validateBasketItemsDetailed(items, false, catalogProducts);
   return result.valid ? result.basket : null;
 }
 
-export function buildDeliveryHandoff(items: Basket, storeId: string, now = new Date(), catalogStores: readonly Store[] = stores): DeliveryHandoff | null {
+export function buildDeliveryHandoff(items: Basket, storeId: string, now = new Date(), catalogStores: readonly Store[] = stores, catalogProducts: readonly Product[] = products): DeliveryHandoff | null {
   if (!Number.isFinite(now.getTime())) return null;
   const store = catalogStores.find((candidate) => candidate.id === storeId);
   if (!store) return null;
   if (store.delivery.capability === 'unsupported') return null;
-  const validation = validateBasketItemsDetailed(items);
+  const validation = validateBasketItemsDetailed(items, false, catalogProducts);
   if (!validation.valid) return null;
   const safeItems = validation.basket;
   const handoffItems: HandoffItem[] = [];
   const warnings: string[] = [];
   for (const [productId, quantity] of Object.entries(safeItems)) {
-    const product = products.find((candidate) => candidate.id === productId);
+    const product = catalogProducts.find((candidate) => candidate.id === productId);
     if (!product) continue;
     const price = getPrice(product, store.id);
     handoffItems.push({ productId, barcode: product.barcode, name: product.name, size: product.size, quantity, price: priceContract(price, now), promotions: product.promotions.filter((promotion) => isPromotionActive(promotion, now)).map((promotion) => ({ id: promotion.id, kind: promotion.kind, label: promotion.label, validUntil: promotion.validUntil, supported: false as const })) });
@@ -236,13 +236,13 @@ function productSummary(product: Product) {
 }
 
 /** Serialize a basket for an API response without exposing the product's cross-branch price map. */
-export function serializeBasketCalculation(items: Basket, storeId: string, now = new Date()) {
-  const calculation = calculateBasket(items, storeId);
+export function serializeBasketCalculation(items: Basket, storeId: string, now = new Date(), catalogProducts: readonly Product[] = products) {
+  const calculation = calculateBasket(items, storeId, catalogProducts);
   const mapLine = (line: (typeof calculation.lines)[number]) => ({ product: productSummary(line.product), quantity: line.quantity, calculation: line.calculation, price: priceContract(getPrice(line.product, storeId), now) });
   const lines = calculation.lines.map(mapLine);
   const unavailable = calculation.unavailable.map(mapLine);
   const states = Object.keys(items).map((id) => {
-    const product = products.find((candidate) => candidate.id === id);
+    const product = catalogProducts.find((candidate) => candidate.id === id);
     return product ? priceContract(getPrice(product, storeId), now) : null;
   }).filter((price): price is PriceContract => Boolean(price));
   const unknownItems = states.filter((price) => price.availabilityState === 'unknown').length;

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { catalogCompleteness, getPrice, products, searchProducts, stores } from '@/lib/data';
+import { getPrice, stores } from '@/lib/data';
 import { rateLimit } from '@/lib/api';
 import { loadStoreDirectory, storesFromDirectory } from '@/lib/store-directory';
 import { getCatalogBranchCoverage, priceContract } from '@/lib/shopping';
+import { getRuntimeBranchPromotions, loadRuntimeCatalog, searchRuntimeProducts } from '@/lib/catalog-runtime';
 
 const noStoreHeaders = { 'cache-control': 'no-store' };
 
@@ -25,10 +26,11 @@ export async function GET(request: Request) {
   const sort = url.searchParams.get('sort') ?? 'relevance';
   if (page === null || pageSize === null || !['relevance', 'price', 'unit', 'unitPrice'].includes(sort)) return NextResponse.json({ error: 'invalid_pagination_or_sort', code: 'invalid_query_parameters' }, { status: 400 });
   if (query.length > 120 || barcode.length > 32) return NextResponse.json({ error: 'שאילתת חיפוש ארוכה מדי' }, { status: 400 });
+  const catalog = await loadRuntimeCatalog();
   const directory = await loadStoreDirectory();
   const catalogStores = storesFromDirectory(stores, directory.entries);
   if (requestedStoreId && !catalogStores.some((store) => store.id === requestedStoreId)) return NextResponse.json({ error: 'סניף לא מוכר' }, { status: 400 });
-  const searched = barcode ? searchProducts(barcode).filter((product) => product.barcode === barcode) : searchProducts(query);
+  const searched = barcode ? catalog.products.filter((product) => product.barcode === barcode) : searchRuntimeProducts(query, catalog.products);
   const categorized = category && category !== 'all' ? searched.filter((product) => product.category === category) : searched;
   const allResults = categorized.map((product, index) => ({ product, index })).sort((left, right) => {
     if (sort === 'relevance') return left.index - right.index;
@@ -42,8 +44,11 @@ export async function GET(request: Request) {
   }).map(({ product }) => product);
   const results = allResults.slice((page - 1) * pageSize, page * pageSize);
   const pagination = { page, pageSize, total: allResults.length, hasNext: page * pageSize < allResults.length, hasPrevious: page > 1, nextPage: page * pageSize < allResults.length ? page + 1 : null, previousPage: page > 1 ? page - 1 : null };
+  const now = new Date();
   return NextResponse.json({ status: allResults.length ? 'ready' : 'no_results', pagination, category: category || null, sort: sort === 'unitPrice' ? 'unit' : sort, results: results.map((product) => {
     const price = requestedStoreId ? priceContract(getPrice(product, requestedStoreId)) : null;
-    return { id: product.id, barcode: product.barcode, name: product.name, brand: product.brand, size: product.size, category: product.category, tag: product.tag, icon: product.icon, aliases: product.aliases, imageUrl: product.imageUrl, imageAlt: product.imageAlt, promotions: product.promotions, price, trustState: price?.trustState ?? 'unknown', availabilityState: price?.availabilityState ?? 'unknown', freshness: price?.freshness ?? { state: 'unknown', checkedAt: null, label: 'checked-at unknown' } };
-  }), page, pageSize, total: allResults.length, hasMore: page * pageSize < allResults.length, storeId: requestedStoreId, query, freshness: 'הנתונים עודכנו היום', coverage: requestedStoreId ? getCatalogBranchCoverage(products, catalogStores).find((coverage) => coverage.storeId === requestedStoreId) ?? null : null, catalog: catalogCompleteness, directory: directory.completeness }, { headers: noStoreHeaders });
+    const branchPrices = Object.fromEntries(Object.entries(product.prices).map(([storeId, observation]) => [storeId, priceContract(observation, now)]));
+    const branchAvailability = product.branchAvailability ?? Object.fromEntries(Object.entries(product.prices).map(([storeId, observation]) => [storeId, observation.available]));
+    return { id: product.id, barcode: product.barcode, name: product.name, brand: product.brand, size: product.size, category: product.category, tag: product.tag, icon: product.icon, aliases: product.aliases, imageUrl: product.imageUrl, imageAlt: product.imageAlt, image: product.image ?? null, provenance: product.provenance ?? null, prices: branchPrices, branchPrices, branchAvailability, promotions: product.promotions, branchPromotions: getRuntimeBranchPromotions(catalog, product), price, trustState: price?.trustState ?? 'unknown', availabilityState: price?.availabilityState ?? 'unknown', freshness: price?.freshness ?? { state: 'unknown', checkedAt: null, label: 'checked-at unknown' } };
+  }), page, pageSize, total: allResults.length, hasMore: page * pageSize < allResults.length, storeId: requestedStoreId, query, freshness: 'lastVerified' in catalog.completeness ? catalog.completeness.lastVerified : null, coverage: requestedStoreId ? getCatalogBranchCoverage(catalog.products, catalogStores, now).find((coverage) => coverage.storeId === requestedStoreId) ?? null : null, catalog: catalog.completeness, catalogSource: catalog.source, fallbackUsed: catalog.fallbackUsed, warnings: catalog.warnings, directory: directory.completeness }, { headers: noStoreHeaders });
 }
