@@ -37,6 +37,7 @@ test('configured provider results are normalized and limited to Israel', async (
         return {
           results: [
             { id: 'il-1', display_name: 'הרצל 10, חיפה', address: { city: 'חיפה', country_code: 'il' }, lat: '32.794', lon: '34.989', type: 'house', confidence: 0.91 },
+            { id: 'il-road', display_name: 'היורה, גן יבנה', address: { town: 'גן יבנה', country_code: 'il' }, lat: '31.793', lon: '34.708', addresstype: 'road', type: 'residential' },
             { id: 'outside', display_name: 'London', address: { country_code: 'gb' }, lat: 51.5, lon: -0.1 },
           ],
         };
@@ -46,9 +47,10 @@ test('configured provider results are normalized and limited to Israel', async (
   const resolution = await resolveAddressSearch('הרצל 10, חיפה', geocoder);
   assert.equal(resolution.mode, 'provider');
   assert.equal(resolution.providerStatus, 'ok');
-  assert.deepEqual(resolution.results.map((result) => result.id), ['il-1']);
+  assert.deepEqual(resolution.results.map((result) => result.id), ['il-1', 'il-road']);
   assert.equal(resolution.results[0]?.isExactAddress, true);
   assert.equal(resolution.results[0]?.coordinates.lon, 34.989);
+  assert.equal(resolution.results[1]?.isExactAddress, false);
 });
 
 test('configured HTTP endpoint is called with an Israeli search scope', async () => {

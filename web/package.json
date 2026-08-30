@@ -6,14 +6,19 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "predev": "node scripts/build-address-directory.mjs",
     "dev": "vinext dev",
+    "prebuild": "node scripts/build-address-directory.mjs",
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "pretypecheck": "node scripts/build-address-directory.mjs",
     "typecheck": "tsc --noEmit",
+    "pretest": "node scripts/build-address-directory.mjs",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts"
   },
   "dependencies": {
+    "@il-address/core": "^1.0.0",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"

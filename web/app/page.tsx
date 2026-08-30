@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AddressSuggestion } from '@/lib/address-directory';
 import { calculateBasket, calculateLine, formatDistance, getPrice, isPromotionActive, money, products, searchProducts, type AddressResult, type Product, type Store } from '@/lib/data';
 
 type Basket = Record<string, number>;
@@ -38,6 +39,8 @@ export default function Home() {
   const [shoppingMode, setShoppingMode] = useState<ShoppingMode>('physical');
   const [locationQuery, setLocationQuery] = useState('');
   const [addressResults, setAddressResults] = useState<AddressResult[]>([]);
+  const [directorySuggestions, setDirectorySuggestions] = useState<AddressSuggestion[]>([]);
+  const [directorySearchLoading, setDirectorySearchLoading] = useState(false);
   const [addressSearchLoading, setAddressSearchLoading] = useState(false);
   const [locationOpen, setLocationOpen] = useState(true);
   const [locationError, setLocationError] = useState('');
@@ -48,6 +51,7 @@ export default function Home() {
   const [liveMessage, setLiveMessage] = useState('');
   const basketHydrated = useRef(false);
   const modeHydrated = useRef(false);
+  const pendingDirectoryAddress = useRef<string | null>(null);
 
   useEffect(() => {
     window.requestAnimationFrame(() => {
@@ -112,7 +116,14 @@ export default function Home() {
         .then(async (response) => {
           const payload = await response.json() as { results?: AddressResult[]; error?: string };
           if (!response.ok) throw new Error(payload.error || 'address search failed');
-          setAddressResults(Array.isArray(payload.results) ? payload.results : []);
+          const results = Array.isArray(payload.results) ? payload.results : [];
+          setAddressResults(results);
+          const pendingAddress = pendingDirectoryAddress.current;
+          if (pendingAddress === query) {
+            pendingDirectoryAddress.current = null;
+            if (results[0]) void loadNearbyStores(pendingAddress, results[0].lat, results[0].lon, 'address');
+            else setLocationError('לא הצלחנו לאתר את הכתובת הזו במפה. אפשר לנסות את שם הרחוב והעיר או להשתמש במיקום הנוכחי.');
+          }
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -123,6 +134,38 @@ export default function Home() {
           if (!controller.signal.aborted) setAddressSearchLoading(false);
         });
     }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [locationQuery]);
+
+  useEffect(() => {
+    const query = locationQuery.trim();
+    if (query.length < 2) {
+      const clearTimer = window.setTimeout(() => {
+        setDirectorySuggestions([]);
+        setDirectorySearchLoading(false);
+      }, 0);
+      return () => window.clearTimeout(clearTimer);
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setDirectorySearchLoading(true);
+      fetch(`/api/location/suggestions?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then(async (response) => {
+          const payload = await response.json() as { suggestions?: AddressSuggestion[] };
+          if (!response.ok) throw new Error('address suggestions failed');
+          setDirectorySuggestions(Array.isArray(payload.suggestions) ? payload.suggestions : []);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+          setDirectorySuggestions([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setDirectorySearchLoading(false);
+        });
+    }, 100);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
@@ -231,6 +274,16 @@ export default function Home() {
     void loadNearbyStores(result.label, result.lat, result.lon, 'address');
   }
 
+  function chooseDirectorySuggestion(suggestion: AddressSuggestion) {
+    pendingDirectoryAddress.current = suggestion.kind === 'address' ? suggestion.addressQuery : null;
+    setLocationQuery(suggestion.addressQuery);
+    setDirectorySuggestions([]);
+    setLocationError('');
+    setLocationNotice('');
+    if (suggestion.kind === 'city' || suggestion.kind === 'street') return;
+    setLiveMessage(`מחפשים את ${suggestion.label}`);
+  }
+
   function continueWithManualAddress() {
     const label = locationQuery.trim();
     if (label.length < 3) return;
@@ -261,7 +314,7 @@ export default function Home() {
       <aside className="basket-panel" aria-labelledby="basket-title"><div className="panel-top"><div><span className="eyebrow">הבחירות שלך</span><h2 id="basket-title">הסל שלי <span>{itemCount}</span></h2></div><button className="clear-button" aria-label="ניקוי הסל" onClick={() => setBasket({})}>נקה</button></div>{selectedStoreData ? <div className="basket-store"><span className={`store-logo ${selectedStoreData.color}`}>{selectedStoreData.chain.slice(0, 1)}</span><div><strong>{selectedStoreData.name}</strong><small>{selectedStoreData.address}</small></div><span className="open-now">{selectedStoreData.openNow ? 'פתוח' : 'סגור'}</span></div> : <div className="basket-store basket-store-pending"><span className="store-logo muted-logo" aria-hidden="true">⌖</span><div><strong>עדיין לא נבחר סניף</strong><small>{locationReady ? 'בחרו סניף כדי לראות סכומים ומחירים' : 'הזינו כתובת ואז בחרו סניף'}</small></div></div>}<div className="basket-items">{basketProducts.length ? basketProducts.map((product) => { const line = selectedStore ? calculateLine(product, selectedStore, basket[product.id]) : null; const price = selectedStore ? getPrice(product, selectedStore) : null; return <div className="basket-item" key={product.id}><span className={`mini-art art-${product.id}`} aria-hidden="true">{product.icon}</span><div><strong>{product.name}</strong><small>{basket[product.id]} × {price?.amount !== null && price?.amount !== undefined ? money(price.amount) : 'מחיר אחרי בחירת סניף'}</small>{line?.promotionNote && <em>{line.promotionNote}</em>}</div><b>{line ? (line.publicTotal === null ? 'לא זמין' : money(line.publicTotal)) : '—'}</b></div>; }) : <div className="empty-basket">הסל שלך ריק כרגע.<br />הוסיפו מוצרים מהרשימה אחרי בחירת סניף.</div>}</div>{calculation && calculation.unavailable.length > 0 && <div className="unavailable-note" role="alert">{calculation.unavailable.length} מוצר{calculation.unavailable.length > 1 ? 'ים' : ''} לא זמין בסניף הזה. הסכום לא כולל אותו.</div>}{calculation && alternateStore && alternateCalculation && basketProducts.length > 0 && <div className="compare-callout"><span aria-hidden="true">✦</span><div><strong>{savings > 0 ? `אפשר לחסוך ${money(savings)}` : 'הסניף הנבחר משתלם'}</strong><small>{savings > 0 ? `בסניף ${alternateStore.chain}, שנמצא ${formatDistance(alternateStore.distanceKm)} מכאן` : 'המחיר הנמוך ביותר בין הסניפים שנבדקו'}</small></div><button onClick={() => setCompareOpen(true)} aria-label="השוואת סל בין סניפים">←</button></div>}{<div className={`total-block ${calculation ? '' : 'total-block-pending'}`}>{calculation ? <><div><span>סה״כ בסניף הנבחר</span><strong>{money(calculation.publicTotal)}</strong></div><div className="club-total"><span>עם הטבות מועדון</span><strong>−{money(calculation.clubSavings)}</strong></div><div className="total-line"><span>סה״כ לתשלום</span><strong>{money(calculation.publicTotal - calculation.clubSavings)}</strong></div></> : <div><span>סה״כ</span><strong>—</strong></div>}</div>}<button className="primary-action" disabled={!selectedStore || !basketProducts.length} onClick={() => { if (selectedStore) setCompareOpen(true); }}>{shoppingMode === 'delivery' ? 'השוואת סל למשלוח' : 'השוואת הסל המלא'} <span aria-hidden="true">←</span></button>{shoppingMode === 'delivery' && <p className="mode-note">מצב משלוח מסמן את כוונת הקנייה. העברת הסל לאתרי הרשתות עדיין אינה זמינה.</p>}<p className="disclaimer">מחירי המדף עשויים להשתנות בחנות. המחיר בקופה הוא הקובע.</p></aside>
     </div>
     <footer className="site-footer"><span>© 2026 סל זול · נתוני מחירים ממקורות השקיפות של הרשתות</span><nav><a href="https://prices.shufersal.co.il/" rel="noreferrer">מקור נתונים</a><a href="/privacy">פרטיות</a><a href="/terms">תנאי שימוש</a></nav></footer><div className="sr-only" aria-live="polite">{liveMessage}</div>
-        {locationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setLocationOpen(false); }}><section className="modal location-modal" role="dialog" aria-modal="true" aria-labelledby="location-title"><button className="modal-close" onClick={() => setLocationOpen(false)} aria-label="סגירת חלון">×</button><span className="modal-icon">⌖</span><h2 id="location-title">איפה אתם קונים?</h2><p>נמצא סניפים לידכם רק אחרי כתובת או מיקום. לא נשמור את הכתובת, ולא נבחר סניף באופן אוטומטי.</p><button className="location-detect" onClick={useBrowserLocation} disabled={loadingStores}>שימוש במיקום הנוכחי <span>⌖</span></button><div className="modal-divider"><span>או חיפוש כתובת</span></div><input autoFocus value={locationQuery} onChange={(event) => { setLocationQuery(event.target.value); setLocationError(''); setLocationNotice(''); }} placeholder="רחוב, מספר ועיר..." aria-label="חיפוש כתובת" />{addressSearchLoading && <div className="loading-state" role="status">מחפשים כתובות בישראל…</div>}{addressResults.map((result) => <button className="address-result" key={`${result.id}-${result.label}`} onClick={() => chooseAddress(result)} disabled={loadingStores || addressSearchLoading}><strong>{result.label}</strong><small>{result.detail}</small></button>)}{locationQuery.trim().length >= 3 && !addressSearchLoading && !addressResults.length && <><div className="modal-error">לא נמצאה התאמה לכתובת הזו.</div><button className="manual-address-button" onClick={continueWithManualAddress}>המשך עם הכתובת הזו בלי לבחור סניף</button></>}{loadingStores && <div className="loading-state" role="status">טוענים סניפים לפי המיקום שסיפקתם…</div>}{locationError && <div className="modal-error" role="alert">{locationError}</div>}{locationNotice && <div className="modal-notice" role="status">{locationNotice}</div>}<small className="privacy-hint">🔒 הכתובת והמיקום משמשים לחיפוש הנוכחי בלבד.</small></section></div>}
+        {locationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setLocationOpen(false); }}><section className="modal location-modal" role="dialog" aria-modal="true" aria-labelledby="location-title"><button className="modal-close" onClick={() => setLocationOpen(false)} aria-label="סגירת חלון">×</button><span className="modal-icon">⌖</span><h2 id="location-title">איפה אתם קונים?</h2><p>נמצא סניפים לידכם רק אחרי כתובת או מיקום. לא נשמור את הכתובת, ולא נבחר סניף באופן אוטומטי.</p><button className="location-detect" onClick={useBrowserLocation} disabled={loadingStores}>שימוש במיקום הנוכחי <span>⌖</span></button><div className="modal-divider"><span>או חיפוש כתובת</span></div><input autoFocus value={locationQuery} onChange={(event) => { setLocationQuery(event.target.value); setLocationError(''); setLocationNotice(''); }} placeholder="רחוב, מספר ועיר..." aria-label="חיפוש כתובת" />{directorySearchLoading && <div className="loading-state" role="status">מחפשים בכתובות ישראל…</div>}{directorySuggestions.map((suggestion) => <button className="address-result" key={suggestion.id} onClick={() => chooseDirectorySuggestion(suggestion)} disabled={loadingStores}><strong>{suggestion.label}</strong><small>{suggestion.detail}</small></button>)}{addressSearchLoading && <div className="loading-state" role="status">מאתרים את הכתובת…</div>}{addressResults.map((result) => <button className="address-result" key={`${result.id}-${result.label}`} onClick={() => chooseAddress(result)} disabled={loadingStores || addressSearchLoading}><strong>{result.label}</strong><small>{result.detail}</small></button>)}{locationQuery.trim().length >= 2 && !directorySearchLoading && !addressSearchLoading && !directorySuggestions.length && !addressResults.length && <><div className="modal-error">לא נמצאה התאמה לכתובת הזו.</div><button className="manual-address-button" onClick={continueWithManualAddress}>המשך עם הכתובת הזו בלי לבחור סניף</button></>}{loadingStores && <div className="loading-state" role="status">טוענים סניפים לפי המיקום שסיפקתם…</div>}{locationError && <div className="modal-error" role="alert">{locationError}</div>}{locationNotice && <div className="modal-notice" role="status">{locationNotice}</div>}<small className="privacy-hint">🔒 הכתובת והמיקום משמשים לחיפוש הנוכחי בלבד.</small></section></div>}
     {compareOpen && selectedStore && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCompareOpen(false); }}><section className="modal compare-modal" role="dialog" aria-modal="true" aria-labelledby="compare-title"><button className="modal-close" onClick={() => setCompareOpen(false)} aria-label="סגירת חלון">×</button><span className="eyebrow">השוואת סל</span><h2 id="compare-title">איפה הסל שלך משתלם יותר?</h2><p>המחירים כוללים מבצעים ציבוריים. הטבות מועדון מוצגות בנפרד.</p><div className="compare-table">{nearbyStores.map((store) => { const total = calculateBasket(basket, store.id); const selected = store.id === selectedStore; return <button className={`compare-row ${selected ? 'selected' : ''}`} key={store.id} onClick={() => { chooseStore(store.id); setCompareOpen(false); }}><span className={`store-logo ${store.color}`}>{store.chain.slice(0, 1)}</span><span><strong>{store.name}</strong><small>{formatDistance(store.distanceKm)} · {total.unavailable.length ? `${total.unavailable.length} חסרים` : 'הכל זמין'}</small></span><b>{money(total.publicTotal)}</b>{selected && <em>נבחר</em>}</button>; })}</div><p className="modal-footnote">ההשוואה היא לפי המחירים שנקלטו לאחרונה. המחיר בקופה הוא הקובע.</p></section></div>}
   </main>;
 }

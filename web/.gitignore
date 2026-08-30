@@ -34,6 +34,7 @@ yarn-error.log*
 .vercel
 next-env.d.ts
 /dist/
+/lib/address-directory.generated.ts
 /.wrangler/
 /outputs/
 /work/

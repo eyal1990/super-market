@@ -272,7 +272,7 @@ function isIsraeliResult(candidate: Record<string, unknown>, coordinates: { lat:
 }
 
 function granularityFromCandidate(candidate: Record<string, unknown>): GeocodingGranularity {
-  const value = asString(candidate.granularity ?? candidate.type)?.toLowerCase();
+  const value = asString(candidate.granularity ?? candidate.addresstype ?? candidate.type)?.toLowerCase();
   if (value && ['address', 'house', 'building', 'residential'].includes(value)) return 'address';
   if (value === 'street' || value === 'road') return 'street';
   if (value && ['city', 'town', 'village', 'municipality', 'locality'].includes(value)) return 'city';
