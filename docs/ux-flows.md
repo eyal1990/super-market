@@ -5,7 +5,7 @@ The first release is Hebrew-first and right-to-left. It keeps one primary branch
 ## States covered
 
 - First visit: a usable Tel Aviv fixture is shown, while the location pill opens address search or permission-based browser location.
-- Address search: known fixture results are selectable; no-result, denied-permission, and unsupported-browser messages keep manual branch selection available.
+- Address search: live Israeli geocoding is used through the server proxy by default, with known fixture results retained for offline development and tests. No-result, denied-permission, and unsupported-browser messages keep the location flow recoverable.
 - Store selection: branch cards expose chain, branch name, distance, opening state, and selected state. Selection updates every product price and basket total.
 - Search: Hebrew names, brand, category, punctuation-normalized text, and exact barcode are supported. Empty results offer a reset action.
 - Product comparison: each result shows branch price, unit price, freshness, source category, public promotion, and club-only price when present.
@@ -19,4 +19,4 @@ Semantic headings, labelled controls, pressed states, focus-visible outlines, a 
 
 ## Deliberate limitations
 
-Address lookup is fixture-backed in local development. A production geocoder must be called through a server-side, rate-limited proxy with caching and a descriptive User-Agent. Barcode camera scanning is deferred because keyboard barcode entry already works on all supported browsers and camera support requires a permission-heavy device flow.
+Address lookup uses a server-side, rate-limited, short-lived cached OpenStreetMap/Nominatim proxy by default. The deterministic fixture geocoder remains available to tests and can be used by omitting the API route's provider configuration in direct library calls. Barcode camera scanning is deferred because keyboard barcode entry already works on all supported browsers and camera support requires a permission-heavy device flow.

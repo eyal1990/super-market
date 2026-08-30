@@ -192,6 +192,7 @@ export type AddressGeocoderConfig = {
   endpoint?: string;
   providerName?: string;
   apiKey?: string;
+  userAgent?: string;
   fetchImpl?: typeof fetch;
   provider?: AddressGeocodingProvider;
 };
@@ -319,7 +320,11 @@ function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoi
       const url = new URL(config.endpoint);
       url.searchParams.set('q', query);
       url.searchParams.set('country', 'il');
+      url.searchParams.set('countrycodes', 'il');
       url.searchParams.set('limit', '8');
+      url.searchParams.set('format', 'jsonv2');
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('accept-language', 'he');
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5_000);
       if (options.signal) {
@@ -328,6 +333,7 @@ function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoi
       }
       try {
         const headers = new Headers({ accept: 'application/json' });
+        if (config.userAgent?.trim()) headers.set('user-agent', config.userAgent.trim());
         if (config.apiKey) headers.set('authorization', `Bearer ${config.apiKey}`);
         const response = await fetchImpl(url, { headers, signal: controller.signal });
         if (!response.ok) throw new Error(`Geocoder returned ${response.status}`);

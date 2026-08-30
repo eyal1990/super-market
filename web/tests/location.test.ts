@@ -53,11 +53,14 @@ test('configured provider results are normalized and limited to Israel', async (
 
 test('configured HTTP endpoint is called with an Israeli search scope', async () => {
   let requestedUrl = '';
+  let requestedUserAgent = '';
   const geocoder = createAddressGeocoder({
     endpoint: 'https://geocoder.invalid/search',
     providerName: 'test-http-provider',
-    fetchImpl: async (input) => {
+    userAgent: 'sal-zol-test/1.0 (tests@example.invalid)',
+    fetchImpl: async (input, init) => {
       requestedUrl = String(input);
+      requestedUserAgent = new Headers(init?.headers).get('user-agent') ?? '';
       return new Response(JSON.stringify({ results: [{ label: 'הנביאים 5, ירושלים', lat: 31.78, lon: 35.22, type: 'house' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   });
@@ -65,7 +68,11 @@ test('configured HTTP endpoint is called with an Israeli search scope', async ()
   const url = new URL(requestedUrl);
   assert.equal(url.searchParams.get('q'), 'הנביאים 5, ירושלים');
   assert.equal(url.searchParams.get('country'), 'il');
+  assert.equal(url.searchParams.get('countrycodes'), 'il');
   assert.equal(url.searchParams.get('limit'), '8');
+  assert.equal(url.searchParams.get('format'), 'jsonv2');
+  assert.equal(url.searchParams.get('accept-language'), 'he');
+  assert.equal(requestedUserAgent, 'sal-zol-test/1.0 (tests@example.invalid)');
   assert.equal(resolution.provider, 'test-http-provider');
   assert.equal(resolution.results[0]?.source, 'provider');
 });
