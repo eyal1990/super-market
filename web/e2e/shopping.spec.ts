@@ -19,6 +19,8 @@ test('first visit is empty, location-gated, and supports a complete physical jou
   await page.getByRole('textbox', { name: 'חיפוש כתובת' }).fill('אבן גבירול 124');
   await expect(page.getByRole('button', { name: /אבן גבירול 124/ }).first()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /אבן גבירול 124/ }).first().click();
+  await expect(page.getByRole('button', { name: /אבן גבירול 124/ }).last()).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: /אבן גבירול 124/ }).last().click();
   await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /קנייה פיזית/ }).click();
   await page.getByRole('button', { name: /שופרסל דיל/ }).first().click();
@@ -42,6 +44,8 @@ test('delivery mode exposes retailer handoff and does not claim an order was pla
   await expect(page.locator('[data-app-ready="true"]')).toBeVisible();
   await page.getByRole('textbox', { name: 'חיפוש כתובת' }).fill('אבן גבירול 124');
   await page.getByRole('button', { name: /אבן גבירול 124/ }).first().click();
+  await expect(page.getByRole('button', { name: /אבן גבירול 124/ }).last()).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: /אבן גבירול 124/ }).last().click();
   await page.getByRole('button', { name: /קנייה פיזית/ }).click();
   await page.getByRole('button', { name: /שופרסל דיל/ }).first().click();
   await page.getByRole('button', { name: /קנייה במשלוח/ }).click();

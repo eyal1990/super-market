@@ -36,8 +36,8 @@ export async function GET(request: Request) {
     const rightPrice = requestedStoreId ? getPrice(right.product, requestedStoreId) : null;
     const leftValue = sort === 'price' ? leftPrice?.amount : Number.parseFloat(leftPrice?.unitPrice ?? '');
     const rightValue = sort === 'price' ? rightPrice?.amount : Number.parseFloat(rightPrice?.unitPrice ?? '');
-    const safeLeft = leftPrice?.available && leftValue !== null && Number.isFinite(leftValue) ? leftValue : Number.POSITIVE_INFINITY;
-    const safeRight = rightPrice?.available && rightValue !== null && Number.isFinite(rightValue) ? rightValue : Number.POSITIVE_INFINITY;
+    const safeLeft = leftPrice?.available && typeof leftValue === 'number' && Number.isFinite(leftValue) ? leftValue : Number.POSITIVE_INFINITY;
+    const safeRight = rightPrice?.available && typeof rightValue === 'number' && Number.isFinite(rightValue) ? rightValue : Number.POSITIVE_INFINITY;
     return safeLeft - safeRight || left.index - right.index;
   }).map(({ product }) => product);
   const results = allResults.slice((page - 1) * pageSize, page * pageSize);

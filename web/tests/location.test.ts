@@ -182,9 +182,11 @@ test('address resolution exposes empty, ambiguous, out-of-coverage, timeout, and
 });
 
 test('persisted onboarding state rejects corrupt, unknown, and unsafe values', () => {
-  assert.equal(parseBasket('{"cereal":2,"unknown":9,"eggs":0}'), null);
+  assert.deepEqual(parseBasket('{"cereal":2,"unknown":9,"eggs":0}'), { cereal: 2 });
   assert.equal(parseBasket('{broken'), null);
   assert.equal(parseBasket('[]'), null);
+  assert.equal(parseBasket('{"version":2,"items":{"cereal":2}}'), null);
+  assert.equal(parseBasket('{"version":1,"items":{"cereal":2,"unknown":9}}'), null);
   assert.equal(parseShoppingMode('delivery'), 'delivery');
   assert.equal(parseShoppingMode('pickup'), null);
   assert.equal(parseShoppingMode('{"mode":"delivery"}'), null);

@@ -41,7 +41,7 @@ export type StoreDirectoryScope = {
 
 export type StoreDirectoryCompleteness = {
   dataset: 'fixture' | 'configured-source';
-  coverageStatus: 'representative' | 'configured-partial' | 'configured-complete';
+  coverageStatus: 'representative' | 'configured-partial' | 'configured-complete' | 'configured-complete-for-scope';
   branchCount: number;
   districtCount: number;
   supportedChains: string[];

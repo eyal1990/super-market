@@ -6,23 +6,43 @@ export type ShoppingMode = 'physical' | 'delivery';
 export const BASKET_STORAGE_KEY = 'sal-zol-basket-v2';
 export const LEGACY_BASKET_STORAGE_KEY = 'sal-zol-basket';
 export const SHOPPING_MODE_STORAGE_KEY = 'sal-zol-shopping-mode';
+const PERSISTED_BASKET_VERSION = 1;
 
 export function parseBasket(value: string | null): Basket | null {
   if (!value) return null;
   try {
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const entries = Object.entries(parsed);
-    if (entries.length > 100) return null;
-    const safe: Basket = {};
-    for (const [id, quantity] of entries) {
-      if (!products.some((product) => product.id === id) || !Number.isInteger(quantity) || quantity <= 0 || quantity > 99) return null;
-      safe[id] = quantity;
+    const record = parsed as Record<string, unknown>;
+    const isEnvelope = Object.prototype.hasOwnProperty.call(record, 'version') || Object.prototype.hasOwnProperty.call(record, 'items');
+    if (isEnvelope) {
+      if (record.version !== PERSISTED_BASKET_VERSION || !record.items || typeof record.items !== 'object' || Array.isArray(record.items)) return null;
+      return parseBasketEntries(record.items, true);
     }
-    return safe;
+    // Accept the original unversioned map so users do not lose an existing basket.
+    // Legacy data is sanitized entry-by-entry; the versioned format is strict.
+    return parseBasketEntries(record, false);
   } catch {
     return null;
   }
+}
+
+function parseBasketEntries(value: object, strict: boolean): Basket | null {
+    const entries = Object.entries(value);
+    if (entries.length > 100) return null;
+    const safe: Basket = {};
+    for (const [id, quantity] of entries) {
+      if (products.some((product) => product.id === id) && Number.isInteger(quantity) && quantity > 0 && quantity <= 99) {
+        safe[id] = quantity as number;
+      } else if (strict) {
+        return null;
+      }
+    }
+    return Object.keys(safe).length ? safe : null;
+}
+
+export function serializeBasket(items: Basket) {
+  return JSON.stringify({ version: PERSISTED_BASKET_VERSION, items });
 }
 
 export function parseShoppingMode(value: string | null): ShoppingMode | null {
@@ -56,7 +76,10 @@ export function getCatalogBranchCoverage(
     const unavailableProducts = prices.filter((price) => !price.available || price.amount === null).length;
     const unknownProducts = prices.filter((price) => !price.updatedAt || !price.source).length;
     const availabilityState = unknownProducts > 0 ? 'unknown' : unavailableProducts > 0 ? 'partial' : 'complete';
-    return { storeId: store.id, pricedProducts, availableProducts, staleProducts, unavailableProducts, unknownProducts, availabilityState, complete: availabilityState === 'complete' };
+    // `complete` describes observation coverage, while availabilityState tells
+    // callers whether those observations say a product is unavailable.
+    const complete = unknownProducts === 0 && pricedProducts === catalogProducts.length;
+    return { storeId: store.id, pricedProducts, availableProducts, staleProducts, unavailableProducts, unknownProducts, availabilityState, complete };
   });
 }
 

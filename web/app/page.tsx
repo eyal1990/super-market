@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AddressSuggestion } from '@/lib/address-directory';
 import { calculateBasket, calculateLine, catalogCompleteness, formatDistance, freshnessLabel, getPrice, isPromotionActive, money, priceTrustState, products, searchProducts, type AddressResult, type Product, type Store } from '@/lib/data';
-import { BASKET_STORAGE_KEY, LEGACY_BASKET_STORAGE_KEY, parseBasket, parseShoppingMode, SHOPPING_MODE_STORAGE_KEY, type Basket, type ShoppingMode } from '@/lib/shopping';
+import { BASKET_STORAGE_KEY, LEGACY_BASKET_STORAGE_KEY, parseBasket, parseShoppingMode, serializeBasket, SHOPPING_MODE_STORAGE_KEY, type Basket, type ShoppingMode } from '@/lib/shopping';
 import type { DeliveryHandoff } from '@/lib/shopping';
 type LocationSelection = {
   label: string;
@@ -97,7 +97,6 @@ export default function Home() {
   const shoppingModeRef = useRef<ShoppingMode>(shoppingMode);
   const nearbyRequestId = useRef(0);
   const modalReturnFocus = useRef<HTMLElement | null>(null);
-  const pendingDirectoryAddress = useRef<string | null>(null);
   const skipNextDirectorySearch = useRef<string | null>(null);
   const [addressSearchNonce, setAddressSearchNonce] = useState(0);
   const [directorySearchNonce, setDirectorySearchNonce] = useState(0);
@@ -168,7 +167,7 @@ export default function Home() {
   useEffect(() => {
     if (basketHydrated.current) {
       try {
-        window.localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(basket));
+        window.localStorage.setItem(BASKET_STORAGE_KEY, serializeBasket(basket));
       } catch {
         // Private browsing may disable local storage.
       }

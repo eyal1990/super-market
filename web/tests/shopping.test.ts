@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { catalogCompleteness, freshnessLabel, isPriceStale, priceTrustState, products, stores } from '../lib/data.ts';
-import { buildDeliveryHandoff, getCatalogBranchCoverage, parseBasket, parseShoppingMode, validateBasketItems } from '../lib/shopping.ts';
+import { buildDeliveryHandoff, getCatalogBranchCoverage, parseBasket, parseShoppingMode, serializeBasket, validateBasketItems } from '../lib/shopping.ts';
 
 test('basket persistence accepts only known positive quantities', () => {
   assert.deepEqual(parseBasket(JSON.stringify({ milk: 2, unknown: 4, cereal: 0, eggs: 100 })), { milk: 2 });
+  assert.deepEqual(parseBasket(serializeBasket({ milk: 2 })), { milk: 2 });
   assert.equal(parseBasket('{broken'), null);
   assert.equal(parseShoppingMode('delivery'), 'delivery');
   assert.equal(parseShoppingMode('club'), null);
@@ -36,6 +37,7 @@ test('catalog completeness reports all fixture branches and preserves unavailabl
   assert.equal(coverage.length, stores.length);
   assert.ok(coverage.every((branch) => branch.complete));
   assert.equal(coverage.find((branch) => branch.storeId === 'victory-yh')?.unavailableProducts, 1);
+  assert.equal(coverage.find((branch) => branch.storeId === 'victory-yh')?.availabilityState, 'partial');
   assert.equal(catalogCompleteness.imageCoverage, 1);
 });
 
