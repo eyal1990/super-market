@@ -1,5 +1,6 @@
 export type Store = {
   id: string;
+  retailerId: string;
   chain: string;
   name: string;
   address: string;
@@ -7,6 +8,12 @@ export type Store = {
   color: 'mint' | 'blue' | 'yellow';
   coordinates: { lat: number; lon: number };
   openNow: boolean;
+  delivery: {
+    capability: 'deep_link' | 'partial' | 'manual' | 'unsupported';
+    retailerUrl?: string;
+    coverageVerified: boolean;
+    feesVerified: boolean;
+  };
 };
 
 export type PriceObservation = {
@@ -37,21 +44,29 @@ export type Product = {
   category: string;
   tag: string;
   icon: string;
+  aliases: string[];
+  imageUrl?: string;
+  imageAlt: string;
   prices: Record<string, PriceObservation>;
   promotions: Promotion[];
 };
 
 const fresh = '2026-08-30T08:18:00+03:00';
 
+function openFoodFactsImage(barcode: string) {
+  const digits = barcode.replace(/\D/g, '').padStart(13, '0');
+  return `https://images.openfoodfacts.org/images/products/${digits.slice(0, 3)}/${digits.slice(3, 6)}/${digits.slice(6, 9)}/${digits.slice(9)}/front_he.400.jpg`;
+}
+
 export const stores: Store[] = [
-  { id: 'shufersal-avenue', chain: 'שופרסל', name: 'שופרסל דיל · אבן גבירול', distanceKm: 0.8, address: 'אבן גבירול 124, תל אביב', color: 'mint', coordinates: { lat: 32.086, lon: 34.783 }, openNow: true },
-  { id: 'rami-levy-azrieli', chain: 'רמי לוי', name: 'רמי לוי · מגדלי תל אביב', distanceKm: 1.6, address: 'דרך מנחם בגין 132, תל אביב', color: 'blue', coordinates: { lat: 32.074, lon: 34.79 }, openNow: true },
-  { id: 'victory-yh', chain: 'ויקטורי', name: 'ויקטורי · יהודה המכבי', distanceKm: 2.1, address: 'יהודה המכבי 42, תל אביב', color: 'yellow', coordinates: { lat: 32.094, lon: 34.793 }, openNow: true },
+  { id: 'shufersal-avenue', retailerId: 'shufersal', chain: 'שופרסל', name: 'שופרסל דיל · אבן גבירול', distanceKm: 0.8, address: 'אבן גבירול 124, תל אביב', color: 'mint', coordinates: { lat: 32.086, lon: 34.783 }, openNow: true, delivery: { capability: 'partial', retailerUrl: 'https://www.shufersal.co.il/', coverageVerified: false, feesVerified: false } },
+  { id: 'rami-levy-azrieli', retailerId: 'rami-levy', chain: 'רמי לוי', name: 'רמי לוי · מגדלי תל אביב', distanceKm: 1.6, address: 'דרך מנחם בגין 132, תל אביב', color: 'blue', coordinates: { lat: 32.074, lon: 34.79 }, openNow: true, delivery: { capability: 'manual', retailerUrl: 'https://www.rami-levy.co.il/', coverageVerified: false, feesVerified: false } },
+  { id: 'victory-yh', retailerId: 'victory', chain: 'ויקטורי', name: 'ויקטורי · יהודה המכבי', distanceKm: 2.1, address: 'יהודה המכבי 42, תל אביב', color: 'yellow', coordinates: { lat: 32.094, lon: 34.793 }, openNow: true, delivery: { capability: 'manual', retailerUrl: 'https://www.victory.co.il/', coverageVerified: false, feesVerified: false } },
 ];
 
 export const products: Product[] = [
   {
-    id: 'milk', barcode: '7290004123456', name: 'חלב 3% מועשר בקרטון', brand: 'תנובה', size: '1 ליטר', category: 'מוצרי חלב', tag: 'מחיר מפוקח', icon: '🥛',
+    id: 'milk', barcode: '7290004123456', name: 'חלב 3% מועשר בקרטון', brand: 'תנובה', size: '1 ליטר', category: 'מוצרי חלב', tag: 'מחיר מפוקח', icon: '🥛', aliases: ['milk', 'tanuva', 'חלב תנובה'], imageUrl: openFoodFactsImage('7290004123456'), imageAlt: 'אריזת חלב 3% מועשר בקרטון',
     prices: {
       'shufersal-avenue': { amount: 7.28, unitPrice: '7.28 ₪ לליטר', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
       'rami-levy-azrieli': { amount: 6.9, unitPrice: '6.90 ₪ לליטר', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
@@ -59,7 +74,7 @@ export const products: Product[] = [
     }, promotions: [],
   },
   {
-    id: 'cereal', barcode: '7290012345678', name: 'קורנפלקס תלמה', brand: 'תלמה', size: '750 גרם', category: 'דגני בוקר', tag: 'מבצע 1+1', icon: '🥣',
+    id: 'cereal', barcode: '7290012345678', name: 'קורנפלקס תלמה', brand: 'תלמה', size: '750 גרם', category: 'דגני בוקר', tag: 'מבצע 1+1', icon: '🥣', aliases: ['cereal', 'corn flakes', 'telma'], imageUrl: openFoodFactsImage('7290012345678'), imageAlt: 'אריזת קורנפלקס תלמה 750 גרם',
     prices: {
       'shufersal-avenue': { amount: 24.9, unitPrice: '3.32 ₪ ל-100 גרם', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
       'rami-levy-azrieli': { amount: 22.9, unitPrice: '3.05 ₪ ל-100 גרם', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
@@ -70,7 +85,7 @@ export const products: Product[] = [
     ],
   },
   {
-    id: 'tomatoes', barcode: '7290023456789', name: 'עגבניות אשכולות', brand: 'תוצרת ישראל', size: '1 ק״ג', category: 'פירות וירקות', tag: 'טרי היום', icon: '🍅',
+    id: 'tomatoes', barcode: '7290023456789', name: 'עגבניות אשכולות', brand: 'תוצרת ישראל', size: '1 ק״ג', category: 'פירות וירקות', tag: 'טרי היום', icon: '🍅', aliases: ['tomato', 'tomatoes'], imageUrl: openFoodFactsImage('7290023456789'), imageAlt: 'עגבניות אשכולות, קילוגרם אחד',
     prices: {
       'shufersal-avenue': { amount: 8.9, unitPrice: '8.90 ₪ לק״ג', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
       'rami-levy-azrieli': { amount: 7.9, unitPrice: '7.90 ₪ לק״ג', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
@@ -78,7 +93,7 @@ export const products: Product[] = [
     }, promotions: [],
   },
   {
-    id: 'pasta', barcode: '7290034567890', name: 'ספגטי מספר 8', brand: 'אסם', size: '500 גרם', category: 'מזווה', tag: 'מחיר טוב', icon: '🍝',
+    id: 'pasta', barcode: '7290034567890', name: 'ספגטי מספר 8', brand: 'אסם', size: '500 גרם', category: 'מזווה', tag: 'מחיר טוב', icon: '🍝', aliases: ['pasta', 'spaghetti', 'osem'], imageUrl: openFoodFactsImage('7290034567890'), imageAlt: 'אריזת ספגטי מספר 8 של אסם',
     prices: {
       'shufersal-avenue': { amount: 8.9, unitPrice: '1.78 ₪ ל-100 גרם', updatedAt: fresh, available: true, source: 'Shufersal · PriceFull' },
       'rami-levy-azrieli': { amount: 7.5, unitPrice: '1.50 ₪ ל-100 גרם', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
@@ -86,7 +101,7 @@ export const products: Product[] = [
     }, promotions: [],
   },
   {
-    id: 'eggs', barcode: '7290045678901', name: 'ביצים L · 12 יחידות', brand: 'ישר למהדרין', size: '12 יחידות', category: 'מוצרי יסוד', tag: 'במלאי', icon: '🥚',
+    id: 'eggs', barcode: '7290045678901', name: 'ביצים L · 12 יחידות', brand: 'ישר למהדרין', size: '12 יחידות', category: 'מוצרי יסוד', tag: 'במלאי', icon: '🥚', aliases: ['eggs', 'egg', 'ביצים'], imageUrl: openFoodFactsImage('7290045678901'), imageAlt: 'מארז 12 ביצים בגודל L',
     prices: {
       'shufersal-avenue': { amount: 14.9, unitPrice: '1.24 ₪ לביצה', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
       'rami-levy-azrieli': { amount: 13.9, unitPrice: '1.16 ₪ לביצה', updatedAt: fresh, available: true, source: 'Cerberus · PriceFull' },
@@ -100,13 +115,15 @@ export const formatDistance = (km: number) => km < 1 ? `${Math.round(km * 1000)}
 const round = (value: number) => Number(value.toFixed(2));
 
 export function normalizeSearch(value: string) {
-  return value.toLocaleLowerCase('he-IL').replace(/[״”“'`.,/\\-]/g, '').replace(/\s+/g, ' ').trim();
+  return value.toLocaleLowerCase('he-IL')
+    .replace(/[ךםןףץ]/g, (letter) => ({ ך: 'כ', ם: 'מ', ן: 'נ', ף: 'פ', ץ: 'צ' }[letter] ?? letter))
+    .replace(/[״”“'`.,/\\-]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 export function searchProducts(query: string) {
   const q = normalizeSearch(query);
   if (!q) return products;
-  return products.filter((p) => normalizeSearch(`${p.name} ${p.brand} ${p.category} ${p.barcode}`).includes(q));
+  return products.filter((p) => normalizeSearch(`${p.name} ${p.brand} ${p.category} ${p.barcode} ${p.aliases.join(' ')}`).includes(q));
 }
 
 export function getPrice(product: Product, storeId: string) {
@@ -139,7 +156,8 @@ export function calculateLine(product: Product, storeId: string, quantity: numbe
 export function calculateBasket(items: Record<string, number>, storeId: string) {
   const lines = Object.entries(items).map(([id, quantity]) => {
     const product = products.find((p) => p.id === id);
-    return product ? { product, quantity, calculation: calculateLine(product, storeId, quantity) } : null;
+    const safeQuantity = Number.isInteger(quantity) ? Math.max(0, Math.min(99, quantity)) : 0;
+    return product && safeQuantity > 0 ? { product, quantity: safeQuantity, calculation: calculateLine(product, storeId, safeQuantity) } : null;
   }).filter((line): line is { product: Product; quantity: number; calculation: ReturnType<typeof calculateLine> } => Boolean(line));
   const available = lines.filter((line) => line.calculation.publicTotal !== null);
   const unavailable = lines.filter((line) => line.calculation.publicTotal === null);
@@ -150,6 +168,46 @@ export function calculateBasket(items: Record<string, number>, storeId: string) 
     clubSavings: round(available.reduce((sum, line) => sum + line.calculation.clubSavings, 0)),
   };
 }
+
+export type PriceTrustState = 'fresh' | 'stale' | 'unavailable' | 'unknown';
+
+export function isPriceStale(price: PriceObservation, now = new Date(), staleAfterHours = 24) {
+  if (!price.updatedAt || !price.available) return false;
+  const updated = new Date(price.updatedAt);
+  return Number.isNaN(updated.getTime()) || now.getTime() - updated.getTime() > staleAfterHours * 60 * 60 * 1000;
+}
+
+export function priceTrustState(price: PriceObservation, now = new Date()): PriceTrustState {
+  if (!price.available || price.amount === null) return 'unavailable';
+  if (!price.updatedAt) return 'unknown';
+  return isPriceStale(price, now) ? 'stale' : 'fresh';
+}
+
+export function freshnessLabel(updatedAt: string, now = new Date()) {
+  if (!updatedAt) return 'מועד הבדיקה לא ידוע';
+  const timestamp = new Date(updatedAt).getTime();
+  if (!Number.isFinite(timestamp)) return 'מועד הבדיקה לא ידוע';
+  const minutes = Math.max(0, Math.floor((now.getTime() - timestamp) / 60_000));
+  if (minutes < 60) return minutes <= 1 ? 'נבדק עכשיו' : `נבדק לפני ${minutes} דקות`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `נבדק לפני ${hours} שעות`;
+  const days = Math.floor(hours / 24);
+  return `נבדק לפני ${days} ימים`;
+}
+
+/** Fixture metadata is deliberately exposed so UI/API consumers do not imply live catalog completeness. */
+export const catalogCompleteness = {
+  dataset: 'fixture' as const,
+  productCount: products.length,
+  supportedRetailers: ['cerberus', 'shufersal'] as const,
+  branchCount: stores.length,
+  branchPriceCoverage: stores.every((store) => products.every((product) => Boolean(product.prices[store.id]))) ? 1 : 0,
+  imageCoverage: products.length ? products.filter((product) => Boolean(product.imageUrl)).length / products.length : 1,
+  limitations: [
+    'זהו קטלוג fixture מייצג לפיתוח; הוא אינו מכיל את כל מוצרי הרשתות בזמן אמת.',
+    'מוצר ללא מחיר או תמונה אמיתית מסומן במקום להיחשב זמין או להציג מידע משוער.',
+  ],
+};
 
 export const ADDRESS_QUERY_MIN_LENGTH = 2;
 export const ADDRESS_QUERY_MAX_LENGTH = 120;

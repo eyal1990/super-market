@@ -28,3 +28,37 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:3px solid #f0
 .mode-panel { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:13px 15px; margin:25px 0 12px; background:#fff; border:1px solid var(--line); border-radius:11px; }.mode-panel>div:first-child { display:grid; gap:4px; }.mode-panel strong { font-size:12px; }.mode-panel small { color:var(--muted); font-size:9px; }.mode-switch { display:flex; gap:5px; padding:4px; background:#f1f6f3; border-radius:8px; }.mode-switch button { border:0; color:#678078; background:transparent; border-radius:6px; padding:8px 10px; font-size:10px; font-weight:700; }.mode-switch button.active { color:#fff; background:var(--deep); box-shadow:0 2px 5px rgba(29,85,75,.16); }.mode-switch button span { margin-left:5px; }
 .setup-card { display:flex; align-items:center; gap:12px; margin:0 0 22px; padding:15px; color:#315e50; background:#edf8f1; border:1px solid #c9e8d6; border-radius:11px; }.setup-card-warning { color:#745437; background:#fff8ec; border-color:#f0d7a8; }.setup-icon { display:grid; place-items:center; flex:0 0 auto; width:34px; height:34px; border-radius:9px; color:#347c65; background:#d9f0e1; font-size:20px; }.setup-card-warning .setup-icon { color:#9c6b32; background:#f9e8c6; }.setup-card>div { flex:1; }.setup-card strong { display:block; font-size:12px; }.setup-card p { margin:5px 0 0; color:var(--muted); font-size:10px; line-height:1.5; }.setup-button { flex:0 0 auto; border:0; border-radius:7px; padding:9px 11px; color:#fff; background:var(--deep); font-size:10px; font-weight:700; }.store-placeholder { display:grid; justify-items:center; gap:6px; padding:22px 14px; border:1px dashed #cbdcd4; border-radius:10px; color:var(--muted); background:#fff; text-align:center; }.store-placeholder>span { color:#72a28f; font-size:25px; }.store-placeholder strong { color:var(--ink); font-size:11px; }.store-placeholder small { font-size:10px; }.basket-store-pending { align-items:flex-start; }.muted-logo { color:#7c9b91; background:#eef5f1; }.price-pending { color:#a08052; font-size:12px!important; }.total-block-pending { color:var(--muted); }.total-block-pending>div { padding-top:4px; }.primary-action:disabled { opacity:.45; cursor:not-allowed; }.mode-note { margin:11px 0 0; padding:9px; color:#8b704b; background:#fff8ed; border-radius:6px; font-size:9px; line-height:1.5; }.manual-address-button { width:100%; border:1px solid #d5e7dd; border-radius:7px; padding:10px; margin-top:8px; color:#347c65; background:#f5fcf7; font-size:11px; font-weight:700; }.loading-state { margin-top:10px; padding:10px; border-radius:7px; color:#527b6d; background:#eef8f2; font-size:11px; }.modal-notice { margin-top:10px; padding:10px; border-radius:7px; color:#6d674d; background:#fff9e9; font-size:11px; line-height:1.5; }
 @media (max-width:600px) { .mode-panel { align-items:stretch; flex-direction:column; gap:10px; }.mode-switch button { flex:1; }.setup-card { align-items:flex-start; flex-wrap:wrap; }.setup-card>div { min-width:calc(100% - 50px); }.setup-button { margin-right:46px; }.store-strip-expanded .store-card { display:flex; } }
+
+.mode-indicator { color:#397c68; background:#edf8f1; border:1px solid #d8eee1; border-radius:999px; padding:8px 10px; font-size:10px; font-weight:700; white-space:nowrap; }
+.product-art { overflow:hidden; }
+.product-art img,.mini-art img { width:100%; height:100%; object-fit:contain; display:block; }
+.image-fallback { background:linear-gradient(135deg,#f4f8ee,#e7f1e8); }
+.product-card-stale { border-color:#ead9b7; }
+.unavailable-tag,.stale-tag { border-radius:4px; padding:3px 6px; font-size:9px; font-weight:700; }
+.unavailable-tag { color:#9a5b4f; background:#fff1ed; }
+.stale-tag { color:#96703a; background:#fff7e2; }
+.data-actions { display:flex; align-items:center; gap:10px; }
+.data-details { position:relative; color:#377e6a; font-size:10px; }
+.data-details summary { cursor:pointer; font-weight:700; list-style:none; }
+.data-details summary::before { content:'ⓘ '; }
+.data-details>div { position:absolute; z-index:3; left:0; top:24px; width:270px; display:grid; gap:6px; padding:12px; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(23,65,57,.12); color:var(--muted); line-height:1.5; }
+.data-details strong { color:var(--ink); }
+.product-filters { display:flex; gap:8px; justify-content:flex-start; margin:-4px 0 12px; }
+.product-filters label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:10px; }
+.product-filters select { border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); padding:6px 8px; font-size:10px; }
+.onboarding-progress { display:flex; gap:7px; margin:0 0 20px; color:#a2afa9; font-size:10px; }
+.onboarding-progress span { flex:1; padding:7px 8px; text-align:center; background:#f2f6f3; border-radius:6px; }
+.onboarding-progress .current { color:#317c68; background:#e7f5ed; font-weight:700; }
+.onboarding-progress .done { color:#fff; background:#56967f; font-weight:700; }
+.handoff-panel { display:grid; gap:8px; margin-top:16px; padding:12px; border-radius:9px; background:#f4faf6; border:1px solid #d8ebe0; }
+.handoff-panel>strong { font-size:12px; }
+.handoff-panel>small { color:var(--muted); font-size:10px; line-height:1.5; }
+.handoff-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.handoff-button { border:1px solid #8ecab0; color:#347c65; background:#fff; border-radius:6px; padding:8px 5px; font-size:10px; font-weight:700; }
+.handoff-button:disabled { opacity:.55; }
+.handoff-result { display:grid; gap:5px; padding-top:8px; border-top:1px solid #d8ebe0; }
+.handoff-result strong { font-size:11px; }
+.handoff-result p { margin:0!important; font-size:10px!important; }
+.handoff-result ul { margin:5px 0 0; padding-right:16px; color:#8b704b; font-size:9px; line-height:1.6; }
+.handoff-result a { color:#347c65; font-size:10px; font-weight:700; }
+@media (max-width:600px) { .topbar-actions { gap:6px; }.mode-indicator { padding:7px 6px; font-size:9px; }.product-filters { flex-wrap:wrap; }.data-actions { align-items:flex-start; flex-direction:column; gap:4px; }.data-details>div { right:0; left:auto; }.handoff-actions { grid-template-columns:1fr; } }

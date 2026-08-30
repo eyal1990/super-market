@@ -64,7 +64,7 @@ cd web
 node --experimental-strip-types --test tests/product-flow.test.ts
 ```
 
-CI runs the full lint, typecheck, test, and build sequence on every push and pull request. The current test suite has no browser harness, so first-run UI state, local-storage hydration behavior, browser geolocation permission errors, shopping-mode UI, product images, and retailer delivery handoff remain documented `todo` coverage until those seams exist in production code.
+CI runs lint, typecheck, unit/API tests, build, and deterministic Playwright browser smoke tests on every push and pull request. The browser suite covers desktop and mobile RTL first-run state, location-gated branch selection, product search and basket mutations, delivery mode, and retailer handoff warnings.
 
 On Windows PowerShell systems where the local execution policy blocks `npm.ps1`, use `npm.cmd` in the repository-root commands above (for example, `npm.cmd test`).
 
@@ -84,7 +84,19 @@ The following issues are the active product backlog for the next usable release.
 10. [#28 — Build a first-time onboarding flow](https://github.com/eyal1990/super-market/issues/28)
 11. [#29 — Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
 
-These tests are intentionally production-neutral. They verify the existing data contracts and mark browser-only or not-yet-defined behavior as focused `todo` tests instead of introducing unapproved APIs. `web/tests/location.test.ts` is intentionally outside this change so location-agent work can proceed without overlap.
+These tests are intentionally production-neutral. Unit tests verify data and ingestion contracts; Playwright tests exercise browser-only behavior against mocked geocoding and fixture data. `web/tests/location.test.ts` covers provider behavior without requiring a live geocoder.
+
+Run the browser journey locally after a build with Chromium installed:
+
+```bash
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+The test suite mocks geocoding responses and uses fixture branch data; it does
+not require retailer credentials or a live geocoder. Delivery handoff ends at
+a retailer link or copied list and never places an order.
 
 ## Data and operations
 

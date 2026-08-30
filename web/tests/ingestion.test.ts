@@ -3,6 +3,7 @@ import test from 'node:test';
 import { runIngestion } from '../lib/ingestion/core.ts';
 import { createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
 import { parseCerberusPrices } from '../lib/ingestion/adapters/cerberus.ts';
+import { catalogImportIsSafe, importCatalogPrices } from '../lib/ingestion/catalog.ts';
 import type { DownloadedSourceFile, RetailerSourceAdapter, SourceFile } from '../lib/ingestion/types.ts';
 
 function downloaded(source: SourceFile, xml: string): DownloadedSourceFile {
@@ -40,4 +41,19 @@ test('a failed document creates a partial run without erasing successful records
   let upserted = 0;
   const result = await runIngestion(adapter, { retailerId: 'fixture', runKey: 'fixture-run', now: new Date('2026-08-30T08:00:00Z') }, { async upsertPrices(records) { for await (const record of records) { void record; upserted += 1; } return upserted; } });
   assert.equal(result.status, 'partial'); assert.equal(upserted, 1); assert.equal(result.failures.length, 1); assert.deepEqual(result.processedDocumentIds, ['good']);
+});
+
+test('catalog import keeps the latest branch record, deduplicates identities, and rejects malformed rows', async () => {
+  const source = { retailerId: 'shufersal', adapterId: 'shufersal', sourceFileId: 'catalog-full', sourceUri: 'fixture://catalog', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'fixture' };
+  const records = [
+    { retailerId: 'shufersal', storeId: '001', retailerItemId: 'milk', barcode: '7290004123456', productName: 'חלב', priceNis: 7.28, observedAt: '2026-08-30T08:00:00Z', source },
+    { retailerId: 'shufersal', storeId: '001', retailerItemId: 'milk', barcode: '7290004123456', productName: 'חלב', priceNis: 7.5, observedAt: '2026-08-30T09:00:00Z', source },
+    { retailerId: 'shufersal', storeId: '001', retailerItemId: '', priceNis: -1, observedAt: '', source },
+  ];
+  const result = await importCatalogPrices((async function* () { yield* records; })());
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0]?.priceNis, 7.5);
+  assert.equal(result.duplicateCount, 1);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(catalogImportIsSafe(result), false);
 });

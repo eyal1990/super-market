@@ -67,10 +67,3 @@ test('basket lines retain stable product identity needed for a future handoff', 
   assert.equal(line?.product.barcode, '7290004123456');
   assert.equal(line?.quantity, 2);
 });
-
-test.todo('Home starts with an empty basket and only restores a validated local-storage payload; the parser is private to page.tsx and needs a browser-independent seam');
-test.todo('No store is selected before an address or location resolves nearby branches; this needs UI state coverage or an extracted state helper');
-test.todo('Shopping mode distinguishes physical shopping from delivery data, fees, availability, and fulfillment; no mode contract exists in production yet');
-test.todo('Delivery handoff exposes a retailer-specific contract containing the selected branch, product identity, quantities, and destination without inventing a checkout API');
-test.todo('Every product card has a real product image URL rather than an icon-only placeholder');
-test.todo('The fixture catalog is replaced or supplemented by a completeness check for all products available at each supported branch');
