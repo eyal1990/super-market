@@ -82,7 +82,9 @@ The Cerberus adapter represents the shared retailer feed and recognizes `Stores`
 
 ## Shufersal
 
-The Shufersal adapter targets the transparency portal and recognizes the same document families, including uppercase SAP-style XML. It follows same-origin pagination up to `maxListingPages` and captures the direct Azure Blob GZ links exposed by the portal. Use `diagnoseShufersalCoverage()` after discovery: `file-set-ready-records-unverified` is only a handoff to download/parse validation. If the pagination bound is hit, discovery fails with `DISCOVERY_INCOMPLETE` rather than returning a partial list. Public links still require documented open-data terms or written permission before a complete snapshot can be published.
+The Shufersal adapter targets the official transparency portal and recognizes the same document families, including uppercase SAP-style XML. On the official origin it follows the portal's AJAX category endpoint, `GET /FileObject/UpdateCategory?catID=<category>&storeId=0`, where the observed category mapping is `1=Prices`, `2=PricesFull`, `3=Promos`, `4=PromosFull`, and `5=Stores`. It walks each requested category's same-origin pagination independently, decodes HTML-escaped Azure Blob SAS links, and captures the direct GZ URLs. Set `SHUFERSAL_CATEGORY_ENDPOINT_URL` only when a deployment needs to pin an equivalent permitted endpoint; `SHUFERSAL_LISTING_URL` remains the listing origin.
+
+Use `diagnoseShufersalCoverage()` after discovery: `file-set-ready-records-unverified` is only a handoff to download/parse validation. It does not establish product or rights completeness. Download and parse the all-branch `Stores` snapshot, verify one non-duplicate `PriceFull` file per active branch, validate record/product counts, then publish a manifest with the exact branch IDs and usage terms. If any category's pagination bound is hit, discovery fails with `DISCOVERY_INCOMPLETE` rather than returning a partial list. Public links still require documented open-data terms or written permission before a complete snapshot can be published.
 
 ## Failure handling and recovery
 

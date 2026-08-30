@@ -24,7 +24,7 @@ test('Shufersal discovery follows public transparency pagination and direct blob
     ['https://prices.shufersal.co.il/?page=1', '<a href="/?page=2">next</a><a href="https://pricesprodpublic.blob.core.windows.net/stores/Stores7290027600007-000-20260830-020000.gz">stores</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz">download</a><a href="https://pricesprodpublic.blob.core.windows.net/promofull/PromoFull7290027600007-001-001-20260830-030000.gz">promo</a>'],
     ['https://prices.shufersal.co.il/?page=2', '<a href="/?page=1">previous</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-002-20260830-030000.gz">download</a><a href="https://pricesprodpublic.blob.core.windows.net/promofull/PromoFull7290027600007-001-002-20260830-030000.gz">promo</a>'],
   ]);
-  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', maxListingPages: 5, fetchImpl: async (input) => new Response(pages.get(String(input)) ?? '', { status: 200 }) });
+  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', usePortalCategoryEndpoint: false, maxListingPages: 5, fetchImpl: async (input) => new Response(pages.get(String(input)) ?? '', { status: 200 }) });
   const allFiles = await adapter.discoverFiles({ retailerId: 'shufersal' });
   const files = allFiles.filter((file) => file.documentKind === 'price_full');
   assert.deepEqual(files.map((file) => file.storeId), ['001', '002']);
@@ -36,8 +36,29 @@ test('Shufersal discovery follows public transparency pagination and direct blob
   assert.ok(diagnostic.limitations.some((limitation) => limitation.includes('record counts')));
 });
 
+test('Shufersal discovery follows official category endpoint for complete catalog families', async () => {
+  const endpoint = 'https://fixture.invalid/FileObject/UpdateCategory';
+  const pages = new Map([
+    [`${endpoint}?catID=5&storeId=0`, '<a href="https://blob.fixture/Stores7290027600007-000-20260830-020000.gz">stores</a>'],
+    [`${endpoint}?catID=2&storeId=0`, '<a href="/FileObject/UpdateCategory?catID=2&amp;storeId=0&amp;page=2">next</a><a href="https://blob.fixture/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz?sv=1&amp;sig=two">full 001</a>'],
+    [`${endpoint}?catID=2&storeId=0&page=2`, '<a href="https://blob.fixture/pricefull/PriceFull7290027600007-001-002-20260830-030000.gz?sv=1&amp;sig=two">full 002</a>'],
+    [`${endpoint}?catID=4&storeId=0`, '<a href="https://blob.fixture/promofull/PromoFull7290027600007-001-001-20260830-030000.gz?sv=1&amp;sig=two">promo 001</a>'],
+  ]);
+  const adapter = createShufersalAdapter({
+    listingUrl: 'https://fixture.invalid/',
+    categoryEndpointUrl: endpoint,
+    usePortalCategoryEndpoint: true,
+    maxListingPages: 5,
+    fetchImpl: async (input) => new Response(pages.get(String(input)) ?? '', { status: 200 }),
+  });
+  const files = await adapter.discoverFiles({ retailerId: 'shufersal', documentKinds: ['stores', 'price_full', 'promo_full'] });
+  assert.deepEqual(files.map((file) => file.documentKind), ['stores', 'price_full', 'price_full', 'promo_full']);
+  assert.deepEqual(files.filter((file) => file.documentKind === 'price_full').map((file) => file.storeId), ['001', '002']);
+  assert.equal(files.find((file) => file.documentKind === 'price_full')?.uri, 'https://blob.fixture/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz?sv=1&sig=two');
+});
+
 test('Shufersal discovery fails closed when pagination exceeds its configured bound', async () => {
-  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', maxListingPages: 1, fetchImpl: async () => new Response('<a href="/?page=2">next</a>', { status: 200 }) });
+  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', usePortalCategoryEndpoint: false, maxListingPages: 1, fetchImpl: async () => new Response('<a href="/?page=2">next</a>', { status: 200 }) });
   await assert.rejects(() => adapter.discoverFiles({ retailerId: 'shufersal' }), (error: unknown) => error instanceof Error && error.message.includes('maxListingPages'));
 });
 

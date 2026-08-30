@@ -26,6 +26,9 @@ export function createConfiguredAdapterRegistry(env: NodeJS.ProcessEnv = process
       listingUrl: env.CERBERUS_LISTING_URL?.trim() || undefined,
       baseUrl: env.CERBERUS_FTP_HOST?.trim() ? `ftp://${env.CERBERUS_FTP_HOST.trim()}` : undefined,
     },
-    shufersal: { listingUrl: env.SHUFERSAL_LISTING_URL?.trim() || undefined },
+    shufersal: {
+      listingUrl: env.SHUFERSAL_LISTING_URL?.trim() || undefined,
+      categoryEndpointUrl: env.SHUFERSAL_CATEGORY_ENDPOINT_URL?.trim() || undefined,
+    },
   });
 }

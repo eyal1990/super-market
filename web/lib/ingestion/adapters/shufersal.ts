@@ -27,6 +27,10 @@ export const shufersalDiscoveryMetadata: AdapterDiscoveryMetadata = {
 
 export interface ShufersalAdapterOptions {
   listingUrl?: string;
+  /** Override the portal's AJAX category endpoint used by the official site. */
+  categoryEndpointUrl?: string;
+  /** Force the official category endpoint on/off (useful for fixtures). */
+  usePortalCategoryEndpoint?: boolean;
   /** Maximum number of paginated transparency pages to inspect per run. */
   maxListingPages?: number;
   fetchImpl?: typeof fetch;
@@ -43,6 +47,25 @@ export type ShufersalCoverageDiagnostic = {
   missingPromoFullBranchIds: string[];
   limitations: string[];
 };
+
+const SHUFERSAL_CATEGORY_IDS: Partial<Record<DocumentKind, number>> = {
+  price_incremental: 1,
+  price_full: 2,
+  promo_incremental: 3,
+  promo_full: 4,
+  stores: 5,
+};
+
+const OFFICIAL_SHUFERSAL_ORIGIN = 'https://prices.shufersal.co.il';
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
 
 function classify(fileUri: string): SourceFile | undefined {
   let url: URL;
@@ -69,7 +92,10 @@ function classify(fileUri: string): SourceFile | undefined {
 }
 
 function listingFiles(listing: string, baseUrl: string): SourceFile[] {
-  const links = [...listing.matchAll(/(?:href\s*=\s*["']([^"']+)|\b(https?:\/\/[^\s"']+\.(?:xml|gz)(?:\?[^\s"']*)?))/gi)].map((match) => match[1] ?? match[2]);
+  const links = [...listing.matchAll(/(?:href\s*=\s*["']([^"']+)|\b(https?:\/\/[^\s"']+\.(?:xml|gz)(?:\?[^\s"']*)?))/gi)]
+    .map((match) => match[1] ?? match[2])
+    .filter((link): link is string => Boolean(link))
+    .map(decodeHtmlAttribute);
   const files = links.map((link) => classify(new URL(link, baseUrl).toString())).filter((file): file is SourceFile => Boolean(file));
   return [...new Map(files.map((file) => [file.id, file])).values()];
 }
@@ -78,7 +104,7 @@ function listingPageLinks(listing: string, baseUrl: string): string[] {
   const base = new URL(baseUrl);
   return [...listing.matchAll(/href\s*=\s*["']([^"']+)["']/gi)]
     .map((match) => {
-      try { return new URL(match[1]!, base); } catch { return undefined; }
+      try { return new URL(decodeHtmlAttribute(match[1]!), base); } catch { return undefined; }
     })
     .filter((url): url is URL => url !== undefined)
     .filter((url) => url.origin === base.origin && /(?:^|[?&])page=\d+/i.test(url.search) && !/(?:\.gz|\.xml)$/i.test(url.pathname))
@@ -120,6 +146,36 @@ export function diagnoseShufersalCoverage(files: readonly SourceFile[], listingP
   };
 }
 
+function categoryEndpointFor(listingUrl: string, categoryEndpointUrl: string | undefined, documentKind: DocumentKind): string {
+  const endpoint = new URL(categoryEndpointUrl ?? '/FileObject/UpdateCategory', listingUrl);
+  endpoint.searchParams.set('catID', String(SHUFERSAL_CATEGORY_IDS[documentKind]));
+  endpoint.searchParams.set('storeId', '0');
+  return endpoint.toString();
+}
+
+async function discoverPaginatedListing(
+  startUrl: string,
+  maxPages: number,
+  input: DiscoveryInput,
+  fetchImpl: typeof fetch,
+): Promise<SourceFile[]> {
+  const pending = [startUrl];
+  const visited = new Set<string>();
+  const discovered = new Map<string, SourceFile>();
+  while (pending.length && visited.size < maxPages) {
+    const pageUrl = pending.shift()!;
+    if (visited.has(pageUrl)) continue;
+    visited.add(pageUrl);
+    const response = await fetchWithRetry(pageUrl, { signal: input.signal }, undefined, fetchImpl);
+    if (!response.ok) throw new IngestionError(`Shufersal listing returned HTTP ${response.status}`, `HTTP_${response.status}`, response.status >= 500);
+    const listing = await response.text();
+    for (const file of listingFiles(listing, pageUrl)) discovered.set(file.id, file);
+    for (const link of listingPageLinks(listing, pageUrl)) if (!visited.has(link) && !pending.includes(link)) pending.push(link);
+  }
+  if (pending.length) throw new IngestionError(`Shufersal listing exceeded maxListingPages (${maxPages})`, 'DISCOVERY_INCOMPLETE');
+  return [...discovered.values()];
+}
+
 export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): RetailerSourceAdapter {
   return {
     retailerId: 'shufersal',
@@ -128,21 +184,20 @@ export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): R
       if (options.listFiles) return await options.listFiles(input);
       if (!options.listingUrl) throw new IngestionError('Shufersal discovery needs listFiles or listingUrl', 'DISCOVERY_NOT_CONFIGURED');
       const maxPages = Math.max(1, Math.min(500, options.maxListingPages ?? 100));
-      const pending = [options.listingUrl];
-      const visited = new Set<string>();
-      const discovered = new Map<string, SourceFile>();
-      while (pending.length && visited.size < maxPages) {
-        const pageUrl = pending.shift()!;
-        if (visited.has(pageUrl)) continue;
-        visited.add(pageUrl);
-        const response = await fetchWithRetry(pageUrl, { signal: input.signal }, undefined, options.fetchImpl ?? fetch);
-        if (!response.ok) throw new IngestionError(`Shufersal listing returned HTTP ${response.status}`, `HTTP_${response.status}`, response.status >= 500);
-        const listing = await response.text();
-        for (const file of listingFiles(listing, pageUrl)) discovered.set(file.id, file);
-        for (const link of listingPageLinks(listing, pageUrl)) if (!visited.has(link) && !pending.includes(link)) pending.push(link);
-      }
-      if (pending.length) throw new IngestionError(`Shufersal listing exceeded maxListingPages (${maxPages})`, 'DISCOVERY_INCOMPLETE');
-      const files = [...discovered.values()];
+      const fetchImpl = options.fetchImpl ?? fetch;
+      const requestedKinds = input.documentKinds?.length
+        ? [...new Set(input.documentKinds)]
+        : (Object.keys(SHUFERSAL_CATEGORY_IDS) as DocumentKind[]);
+      const usePortalCategoryEndpoint = options.usePortalCategoryEndpoint
+        ?? (Boolean(options.categoryEndpointUrl) || (() => {
+          try { return new URL(options.listingUrl!).origin === OFFICIAL_SHUFERSAL_ORIGIN; } catch { return false; }
+        })());
+      const starts = usePortalCategoryEndpoint
+        ? requestedKinds.map((kind) => categoryEndpointFor(options.listingUrl!, options.categoryEndpointUrl, kind))
+        : [options.listingUrl];
+      const files = (await Promise.all(starts.map((startUrl) => discoverPaginatedListing(startUrl, maxPages, input, fetchImpl))))
+        .flat()
+        .filter((file, index, all) => all.findIndex((candidate) => candidate.id === file.id) === index);
       const kinds = input.documentKinds ? new Set(input.documentKinds) : undefined;
       return files.filter((file) => !kinds || kinds.has(file.documentKind));
     },

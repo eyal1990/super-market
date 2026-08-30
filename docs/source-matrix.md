@@ -5,7 +5,7 @@ Validated 2026-08-30 for implementation planning. Live source formats remain rep
 | Source family | Current evidence | Adapter status | Known limitation |
 | --- | --- | --- | --- |
 | Cerberus shared feed | The public web client at `https://url.retail.publishedprices.co.il/` currently presents a username/password login; an account is required before files can be discovered | Fixture-compatible adapter with explicit credential-gated metadata | No credentials are committed or assumed. The production worker must inject an approved FTP/TLS/HTTP downloader and a permissioned account. A login page is observable as zero discovered files, never as complete coverage. |
-| Shufersal transparency portal | The official portal at `https://prices.shufersal.co.il/` currently exposes paginated `pricefull` and `promofull` rows whose download links resolve to public Azure Blob GZ objects | Portal adapter with case-insensitive XML parser, direct blob links, bounded pagination, and `diagnoseShufersalCoverage()` | Public reachability is not a redistribution licence. Written permission/open-data terms and a branch/product count manifest are still required before publication. |
+| Shufersal transparency portal | The official portal at `https://prices.shufersal.co.il/` exposes a same-origin `GET /FileObject/UpdateCategory?catID=<1..5>&storeId=0` listing surface. Current category IDs are `1=Prices`, `2=PricesFull`, `3=Promos`, `4=PromosFull`, and `5=Stores`; the full-price response is paginated and links to signed Azure Blob GZ objects. | Portal adapter uses the category endpoint for the official origin (or an explicit `SHUFERSAL_CATEGORY_ENDPOINT_URL`), walks each category's pagination independently, decodes HTML-escaped signed URLs, and retains the fixture-injectable legacy listing path. `diagnoseShufersalCoverage()` still separates file discovery from record validation. | The live page is a dynamic branch/file listing, not a record-count manifest. Public reachability is not a redistribution licence. Written permission/open-data terms, all-branch store parsing, downloaded record counts, and a matching branch/product manifest are still required before publication. |
 | Ministry of Economy “Israel Basket” | Official open-data dataset at [`data.gov.il/he/datasets/moital/israel-sal`](https://data.gov.il/he/datasets/moital/israel-sal) | Reference-only branch/catalog input; transform it into the normalized import contract before use | It is a Carrefour program subset, not every Israeli chain, and the published branch rows do not provide coordinates required by nearby search without a separate permitted enrichment step. |
 | Ministry controlled/imported food datasets | Official open datasets for [controlled consumer prices](https://data.gov.il/he/datasets/moital/price_controlled_consumer_products) and [imported-food selling points](https://data.gov.il/he/datasets/moital/import_quotas) | Reference-price validation only; never used as retailer checkout prices | They do not provide a complete branch-level supermarket catalog or current per-branch price/promotions feed. |
 | Other chains | No source is promoted without current schema and permission evidence | Fixture branch metadata only; delivery handoff is manual | Use the adapter contract and add a fixture before production activation. |
@@ -41,8 +41,13 @@ For Shufersal, `diagnoseShufersalCoverage(files, true)` can report that the
 discovered file set is ready for record validation only when an all-branch
 stores snapshot and one non-duplicate `pricefull` file per discovered branch
 are present. Its `file-set-ready-records-unverified` status does not claim
-complete products, prices, promotions, or rights. Pagination that reaches the
-configured bound fails closed with `DISCOVERY_INCOMPLETE`.
+complete products, prices, promotions, or rights. The adapter now discovers
+the official category endpoint rather than relying on the homepage's default
+`Prices` category, and applies the pagination bound separately to each
+requested category. Pagination that reaches the configured bound fails closed
+with `DISCOVERY_INCOMPLETE`. At the 2026-08-30 investigation, the homepage
+advertised 86 pages while the official `catID=2` full-price response advertised
+22 pages; these are operational observations, not committed coverage counts.
 
 The JSON snapshot contract is intentionally small and provider-neutral:
 
