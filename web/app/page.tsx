@@ -88,12 +88,17 @@ export default function Home() {
   const [handoffLoading, setHandoffLoading] = useState(false);
   const [handoffError, setHandoffError] = useState('');
   const [liveMessage, setLiveMessage] = useState('');
+  const [clientReady, setClientReady] = useState(false);
   const basketHydrated = useRef(false);
   const modeHydrated = useRef(false);
   const pendingDirectoryAddress = useRef<string | null>(null);
   const skipNextDirectorySearch = useRef<string | null>(null);
   const [addressSearchNonce, setAddressSearchNonce] = useState(0);
   const [directorySearchNonce, setDirectorySearchNonce] = useState(0);
+
+  useEffect(() => {
+    setClientReady(true);
+  }, []);
 
   useEffect(() => {
     window.requestAnimationFrame(() => {
@@ -274,7 +279,16 @@ export default function Home() {
     setShoppingMode(mode);
     setModeChosen(true);
     if (mode === 'physical') setHandoff(null);
-    setLiveMessage(mode === 'delivery' ? 'מצב משלוח נבחר' : 'מצב קנייה פיזית נבחר');
+    let message = mode === 'delivery' ? 'מצב משלוח נבחר' : 'מצב קנייה פיזית נבחר';
+    if (mode === 'delivery') {
+      const supportedStores = nearbyStores.filter((store) => store.delivery.capability !== 'unsupported');
+      setNearbyStores(supportedStores);
+      if (selectedStore && !supportedStores.some((store) => store.id === selectedStore)) {
+        setSelectedStore(null);
+        message = 'הסניף הקודם לא תומך בהעברת סל; בחרו סניף משלוח אחר';
+      }
+    }
+    setLiveMessage(message);
   }
 
   function chooseStore(storeId: string) {
@@ -391,7 +405,7 @@ export default function Home() {
     setLocationNotice('אפשר להמשיך לחפש מוצרים, או לנסות ניסוח קצר יותר / כתובת מההצעות.');
   }
 
-  return <main className="app-shell" dir="rtl">
+  return <main className="app-shell" dir="rtl" data-app-ready={clientReady ? 'true' : 'false'}>
     <a className="skip-link" href="#product-search">דלגו לתוכן הראשי</a>
     <header className="topbar">
       <div className="brand-lockup" aria-label="סל זול"><span className="brand-mark" aria-hidden="true">ס</span><span><strong>סל זול</strong><small>קונים חכם, משלמים פחות</small></span></div>

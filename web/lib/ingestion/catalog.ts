@@ -45,7 +45,7 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
     }
     const key = identity(record);
     if (byIdentity.has(key)) duplicateCount += 1;
-    byIdentity.set(key, {
+    const normalized: CatalogProductRecord = {
       retailerId: record.retailerId,
       storeId: record.storeId,
       retailerItemId: record.retailerItemId,
@@ -59,7 +59,9 @@ export async function importCatalogPrices(records: AsyncIterable<NormalizedPrice
       isWeighted: record.isWeighted,
       observedAt: record.observedAt,
       sourceFileId: record.source.sourceFileId,
-    });
+    };
+    const existing = byIdentity.get(key);
+    if (!existing || new Date(normalized.observedAt).getTime() >= new Date(existing.observedAt).getTime()) byIdentity.set(key, normalized);
   }
   return { records: [...byIdentity.values()].sort((left, right) => `${left.storeId}:${left.retailerItemId}`.localeCompare(`${right.storeId}:${right.retailerItemId}`)), duplicateCount, skippedCount, warnings };
 }
