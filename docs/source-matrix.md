@@ -94,9 +94,10 @@ freshness, branch, barcode/item identity, availability, and optional image
 metadata). Arrays without a completeness scope remain importable for local
 work but are never presented as complete coverage.
 
-The current web request handlers still use the committed fixture `products`
-until a worker publishes a validated snapshot and the request layer is wired
-to select it. This scoped data-layer change makes that handoff explicit and
+The web request handlers use the validated runtime catalog when a configured
+snapshot is available. If the snapshot is missing or fails validation, the
+handlers use the committed fixture `products` and expose the fallback source,
+coverage, and warnings in their responses. This makes the handoff explicit and
 safe; it does not claim that a complete external feed is currently available.
 
 Product images use stable Open Food Facts image URLs when a barcode is present.

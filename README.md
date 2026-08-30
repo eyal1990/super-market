@@ -48,16 +48,16 @@ Run the web app's linter from the repository root:
 npm run lint
 ```
 
-Run the checks from the repository root:
+Run the unit/API checks from the repository root:
 
 ```bash
 npm run lint
 npm run typecheck
-npm test
+npm run test
 npm run build
 ```
 
-The tests use Node's built-in test runner and cover Hebrew/barcode search, public multi-buy rules, club-only pricing, unavailable products, empty-basket calculations, explicit branch selection, address fixtures, price freshness, and product identity. Run only the production-neutral product-flow checks with:
+`npm run test` uses Node's built-in test runner and covers Hebrew/barcode search, public multi-buy rules, club-only pricing, unavailable products, empty-basket calculations, explicit branch selection, address fixtures, price freshness, and product identity. (`npm test` is equivalent.) Run only the production-neutral product-flow checks with:
 
 ```bash
 cd web
@@ -70,22 +70,12 @@ The browser suite also checks the product discovery loading/no-results contract 
 
 On Windows PowerShell systems where the local execution policy blocks `npm.ps1`, use `npm.cmd` in the repository-root commands above (for example, `npm.cmd test`).
 
-## Active product backlog
+## Current product backlog
 
-The following issues are the active product backlog for the next usable release. Read the relevant issue before implementing a change:
+The closed legacy behavior issues are audited in [`docs/legacy-acceptance-audit.md`](./docs/legacy-acceptance-audit.md). The remaining open product backlog is:
 
-1. [#19 — Show a real product image on every product card](https://github.com/eyal1990/super-market/issues/19)
-2. [#20 — Import the complete product catalog for every supported branch](https://github.com/eyal1990/super-market/issues/20)
-3. [#21 — Start with an empty basket](https://github.com/eyal1990/super-market/issues/21)
-4. [#22 — Support arbitrary Israeli address entry and geocoding](https://github.com/eyal1990/super-market/issues/22)
-5. [#23 — Make product discovery useful at catalog scale](https://github.com/eyal1990/super-market/issues/23)
-6. [#24 — Hand off a delivery basket to each supported retailer](https://github.com/eyal1990/super-market/issues/24)
-7. [#25 — Add a transparent comparison and data-quality experience](https://github.com/eyal1990/super-market/issues/25)
-8. [#26 — Require address or location before showing a selected store](https://github.com/eyal1990/super-market/issues/26)
-9. [#27 — Add explicit shopping mode: physical shopping or delivery](https://github.com/eyal1990/super-market/issues/27)
-10. [#28 — Build a first-time onboarding flow](https://github.com/eyal1990/super-market/issues/28)
-11. [#29 — Add an end-to-end critical shopping journey and regression suite](https://github.com/eyal1990/super-market/issues/29)
-12. [#30 — Add nationwide Israeli store directory and coverage](https://github.com/eyal1990/super-market/issues/30)
+1. [#20 — Import the complete product catalog for every supported branch](https://github.com/eyal1990/super-market/issues/20)
+2. [#30 — Add nationwide Israeli store directory and coverage](https://github.com/eyal1990/super-market/issues/30)
 
 These tests are intentionally production-neutral. Unit tests verify data and ingestion contracts; Playwright tests exercise browser-only behavior against mocked geocoding and fixture data. `web/tests/location.test.ts` covers provider behavior without requiring a live geocoder.
 
@@ -103,9 +93,9 @@ a retailer link or copied list and never places an order.
 
 ## Data and operations
 
-The app runs with fixture data and does not require retailer credentials. The portable PostgreSQL schema is in [`db/migrations/001_init.sql`](./db/migrations/001_init.sql); start local PostgreSQL with `docker compose up -d postgres` and apply the migration with your preferred PostgreSQL client. The adapter contract and safe ingestion runner live under [`web/lib/ingestion/`](./web/lib/ingestion/), with operational notes in [`docs/ingestion-runbook.md`](./docs/ingestion-runbook.md). The nationwide branch directory is exposed by `GET /api/stores/directory`; its current fixture spans Israeli districts but is explicitly marked representative until an official complete source feed is configured.
+The app uses fixture data by default and does not require retailer credentials. Product search, product prices, basket comparison, and delivery handoff use a validated `CATALOG_SOURCE_URL` snapshot when configured, then expose an explicit fixture fallback when no usable snapshot is available. The portable PostgreSQL schema is in [`db/migrations/001_init.sql`](./db/migrations/001_init.sql); start local PostgreSQL with `docker compose up -d postgres` and apply the migration with your preferred PostgreSQL client. The adapter contract and safe ingestion runner live under [`web/lib/ingestion/`](./web/lib/ingestion/), with operational notes in [`docs/ingestion-runbook.md`](./docs/ingestion-runbook.md). The nationwide branch directory is exposed by `GET /api/stores/directory`; its current fixture spans Israeli districts but is explicitly marked representative until an official complete source feed is configured.
 
-Source and UX decisions are recorded in [`docs/source-matrix.md`](./docs/source-matrix.md), [`docs/ux-flows.md`](./docs/ux-flows.md), and [`docs/security-review.md`](./docs/security-review.md). Exact addresses are not persisted; live geocoding must be added behind a cached, rate-limited server proxy before production use.
+Source and UX decisions are recorded in [`docs/source-matrix.md`](./docs/source-matrix.md), [`docs/ux-flows.md`](./docs/ux-flows.md), and [`docs/security-review.md`](./docs/security-review.md). Address search uses the configured server-side geocoder when available and deterministic fixtures for offline development/tests; exact addresses are not persisted by default.
 
 Deployment, backup, rollback, and scheduled ingestion expectations are in [`docs/deployment.md`](./docs/deployment.md) and [`ops/ingestion-schedules.json`](./ops/ingestion-schedules.json).
 
