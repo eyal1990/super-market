@@ -53,6 +53,8 @@ export async function GET(request: Request) {
       provider: resolution.provider,
       status: resolution.providerStatus,
       fallbackUsed: resolution.fallbackUsed,
+      matchedQuery: resolution.matchedQuery,
+      queryFallbackUsed: resolution.queryFallbackUsed,
       limitations: resolution.limitations,
     },
     privacy: {

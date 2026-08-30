@@ -211,6 +211,21 @@ export function validateAddressQuery(value: string): AddressQueryValidation {
   return { valid: true, query };
 }
 
+/**
+ * Geocoders frequently know a street/city but not every house number. Keep
+ * the user's full query for display, while allowing the resolver to ask for a
+ * useful nearby street result instead of turning that case into a hard miss.
+ */
+export function addressQueryWithoutHouseNumber(query: string): string | null {
+  const withoutHouseNumber = query
+    .replace(/(^|[\s,])\d+[א-ת]?(?=\s|,|$)/g, '$1')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*,\s*|\s*,\s*$/g, '')
+    .trim();
+  return withoutHouseNumber && withoutHouseNumber !== query.trim() ? withoutHouseNumber : null;
+}
+
 const fixtureAddressResults: AddressResult[] = [
   { id: 'tel-aviv', label: 'תל אביב-יפו', detail: 'מחוז תל אביב', lat: 32.0853, lon: 34.7818, coordinates: { lat: 32.0853, lon: 34.7818 }, countryCode: 'IL', confidence: 0.75, granularity: 'city', isExactAddress: false, source: 'fixture', provider: 'fixture' },
   { id: 'even-gvirol', label: 'אבן גבירול 124, תל אביב-יפו', detail: 'תל אביב-יפו', lat: 32.086, lon: 34.783, coordinates: { lat: 32.086, lon: 34.783 }, countryCode: 'IL', confidence: 0.95, granularity: 'address', isExactAddress: true, source: 'fixture', provider: 'fixture' },
@@ -364,17 +379,40 @@ export type AddressSearchResolution = {
   provider: string;
   providerStatus: 'fixture' | 'ok' | 'unavailable';
   fallbackUsed: boolean;
+  matchedQuery: string;
+  queryFallbackUsed: boolean;
   limitations: string[];
 };
 
 export async function resolveAddressSearch(query: string, geocoder = createAddressGeocoder()): Promise<AddressSearchResolution> {
   if (geocoder.mode === 'fixture') {
-    return { results: await geocoder.search(query), mode: 'fixture', configuredMode: 'fixture', provider: geocoder.provider, providerStatus: 'fixture', fallbackUsed: false, limitations: ['מצב fixture מיועד לפיתוח ולבדיקות ואינו מכסה את כל כתובות ישראל.'] };
+    return { results: await geocoder.search(query), mode: 'fixture', configuredMode: 'fixture', provider: geocoder.provider, providerStatus: 'fixture', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: ['מצב fixture מיועד לפיתוח ולבדיקות ואינו מכסה את כל כתובות ישראל.'] };
   }
   try {
-    return { results: await geocoder.search(query), mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, limitations: [] };
+    const results = await geocoder.search(query);
+    if (results.length) {
+      return { results, mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: [] };
+    }
+    const fallbackQuery = addressQueryWithoutHouseNumber(query);
+    if (fallbackQuery) {
+      const nearbyResults = await geocoder.search(fallbackQuery);
+      if (nearbyResults.length) {
+        return {
+          results: nearbyResults,
+          mode: 'provider',
+          configuredMode: 'provider',
+          provider: geocoder.provider,
+          providerStatus: 'ok',
+          fallbackUsed: false,
+          matchedQuery: fallbackQuery,
+          queryFallbackUsed: true,
+          limitations: ['לא נמצאה נקודת מפה למספר הבית המדויק; התוצאות הן לפי הרחוב והיישוב.'],
+        };
+      }
+    }
+    return { results: [], mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: [] };
   } catch {
     const fallback = findAddressResults(query);
-    return { results: fallback, mode: fallback.length ? 'fixture' : 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'unavailable', fallbackUsed: fallback.length > 0, limitations: ['ספק הגיאוקוד לא היה זמין. תוצאות fixture הן fallback מצומצם ואינן מכסות את כל כתובות ישראל.'] };
+    return { results: fallback, mode: fallback.length ? 'fixture' : 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'unavailable', fallbackUsed: fallback.length > 0, matchedQuery: query, queryFallbackUsed: false, limitations: ['ספק הגיאוקוד לא היה זמין. תוצאות fixture הן fallback מצומצם ואינן מכסות את כל כתובות ישראל.'] };
   }
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  addressQueryWithoutHouseNumber,
   createAddressGeocoder,
   resolveAddressSearch,
   validateAddressQuery,
@@ -18,6 +19,12 @@ test('address input is trimmed and validated without rejecting normal Israeli pu
   assert.equal(validationCode('א'), 'too_short');
   assert.equal(validationCode('x'.repeat(121)), 'too_long');
   assert.equal(validationCode('רחוב\nתל אביב'), 'invalid_characters');
+});
+
+test('an address fallback removes only the house number and keeps street and city', () => {
+  assert.equal(addressQueryWithoutHouseNumber('היורה 10, גן יבנה'), 'היורה, גן יבנה');
+  assert.equal(addressQueryWithoutHouseNumber('היורה 10א גן יבנה'), 'היורה גן יבנה');
+  assert.equal(addressQueryWithoutHouseNumber('גן יבנה'), null);
 });
 
 test('default geocoder is deterministic fixture mode and exposes nearby-store coordinates', async () => {
@@ -51,6 +58,27 @@ test('configured provider results are normalized and limited to Israel', async (
   assert.equal(resolution.results[0]?.isExactAddress, true);
   assert.equal(resolution.results[0]?.coordinates.lon, 34.989);
   assert.equal(resolution.results[1]?.isExactAddress, false);
+});
+
+test('an exact house miss retries with street and city results', async () => {
+  const requestedQueries: string[] = [];
+  const geocoder = createAddressGeocoder({
+    provider: {
+      id: 'closest-match-provider',
+      async search(query) {
+        requestedQueries.push(query);
+        if (query === 'היורה, גן יבנה') {
+          return [{ id: 'street-1', display_name: 'היורה, גן יבנה', address: { town: 'גן יבנה', country_code: 'il' }, lat: 31.793, lon: 34.708, addresstype: 'road' }];
+        }
+        return [];
+      },
+    },
+  });
+  const resolution = await resolveAddressSearch('היורה 10, גן יבנה', geocoder);
+  assert.deepEqual(requestedQueries, ['היורה 10, גן יבנה', 'היורה, גן יבנה']);
+  assert.equal(resolution.matchedQuery, 'היורה, גן יבנה');
+  assert.equal(resolution.results[0]?.isExactAddress, false);
+  assert.match(resolution.limitations[0]!, /מספר הבית המדויק/);
 });
 
 test('configured HTTP endpoint is called with an Israeli search scope', async () => {
