@@ -4,6 +4,7 @@ import { rateLimit } from '@/lib/api';
 
 const noStoreHeaders = { 'cache-control': 'no-store' };
 const defaultGeocoderEndpoint = 'https://nominatim.openstreetmap.org/search';
+const defaultFallbackGeocoderEndpoint = 'https://photon.komoot.io/api/';
 const cacheTtlMs = 5 * 60 * 1000;
 const cacheLimit = 256;
 const addressCache = new Map<string, { expiresAt: number; results: Awaited<ReturnType<typeof resolveAddressSearch>> }>();
@@ -38,24 +39,29 @@ export async function GET(request: Request) {
 
   const key = cacheKey(validation.query);
   const cached = readCachedResolution(key);
+  const configuredEndpoint = process.env.LOCATION_GEOCODER_URL ?? process.env.ADDRESS_GEOCODER_URL ?? process.env.GEOCODER_URL;
   const resolution = cached ?? await resolveAddressSearch(validation.query, createAddressGeocoder({
-    endpoint: process.env.LOCATION_GEOCODER_URL ?? process.env.ADDRESS_GEOCODER_URL ?? process.env.GEOCODER_URL ?? defaultGeocoderEndpoint,
+    endpoint: configuredEndpoint ?? defaultGeocoderEndpoint,
     providerName: process.env.LOCATION_GEOCODER_PROVIDER ?? process.env.ADDRESS_GEOCODER_PROVIDER,
     apiKey: process.env.LOCATION_GEOCODER_API_KEY ?? process.env.ADDRESS_GEOCODER_API_KEY,
     userAgent: process.env.GEOCODER_USER_AGENT ?? 'sal-zol/0.1 (Israeli address search)',
   }));
-  if (!cached) writeCachedResolution(key, resolution);
+  const fallbackResolution = !cached && !configuredEndpoint && !resolution.results.length
+    ? await resolveAddressSearch(validation.query, createAddressGeocoder({ endpoint: defaultFallbackGeocoderEndpoint, providerName: 'photon' }))
+    : null;
+  const selectedResolution = fallbackResolution?.results.length ? fallbackResolution : resolution;
+  if (!cached) writeCachedResolution(key, selectedResolution);
   return NextResponse.json({
-    results: resolution.results,
+    results: selectedResolution.results,
     geocoding: {
-      mode: resolution.mode,
-      configuredMode: resolution.configuredMode,
-      provider: resolution.provider,
-      status: resolution.providerStatus,
-      fallbackUsed: resolution.fallbackUsed,
-      matchedQuery: resolution.matchedQuery,
-      queryFallbackUsed: resolution.queryFallbackUsed,
-      limitations: resolution.limitations,
+      mode: selectedResolution.mode,
+      configuredMode: selectedResolution.configuredMode,
+      provider: selectedResolution.provider,
+      status: selectedResolution.providerStatus,
+      fallbackUsed: selectedResolution.fallbackUsed,
+      matchedQuery: selectedResolution.matchedQuery,
+      queryFallbackUsed: selectedResolution.queryFallbackUsed,
+      limitations: selectedResolution.limitations,
     },
     privacy: {
       exactAddressUsedFor: 'current search only',

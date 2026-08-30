@@ -81,6 +81,27 @@ test('an exact house miss retries with street and city results', async () => {
   assert.match(resolution.limitations[0]!, /מספר הבית המדויק/);
 });
 
+test('GeoJSON open geocoder results are normalized into closest address options', async () => {
+  const geocoder = createAddressGeocoder({
+    provider: {
+      id: 'photon',
+      async search() {
+        return {
+          type: 'FeatureCollection',
+          features: [{
+            properties: { type: 'street', name: 'היורה', city: 'גן יבנה', country: 'ישראל', countrycode: 'IL' },
+            geometry: { type: 'Point', coordinates: [34.7078762, 31.7931477] },
+          }],
+        };
+      },
+    },
+  });
+  const resolution = await resolveAddressSearch('היורה 10, גן יבנה', geocoder);
+  assert.equal(resolution.results[0]?.label, 'היורה, גן יבנה, ישראל');
+  assert.equal(resolution.results[0]?.granularity, 'street');
+  assert.equal(resolution.results[0]?.isExactAddress, false);
+});
+
 test('configured HTTP endpoint is called with an Israeli search scope', async () => {
   let requestedUrl = '';
   let requestedUserAgent = '';

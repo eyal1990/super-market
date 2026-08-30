@@ -281,7 +281,7 @@ function coordinatesFromCandidate(candidate: Record<string, unknown>) {
 
 function isIsraeliResult(candidate: Record<string, unknown>, coordinates: { lat: number; lon: number }) {
   const address = asRecord(candidate.address);
-  const countryCode = asString(candidate.countryCode ?? candidate.country_code ?? address?.countryCode ?? address?.country_code);
+  const countryCode = asString(candidate.countryCode ?? candidate.country_code ?? candidate.countrycode ?? address?.countryCode ?? address?.country_code ?? address?.countrycode);
   if (countryCode) return countryCode.toLowerCase() === 'il' || countryCode.toLowerCase() === 'israel';
   return coordinates.lat >= 29 && coordinates.lat <= 33.7 && coordinates.lon >= 34.1 && coordinates.lon <= 35.9;
 }
@@ -296,14 +296,27 @@ function granularityFromCandidate(candidate: Record<string, unknown>): Geocoding
 
 function normalizeProviderResults(payload: unknown, provider: string): AddressResult[] {
   const payloadRecord = asRecord(payload);
-  const candidates = Array.isArray(payload) ? payload : payloadRecord && Array.isArray(payloadRecord.results) ? payloadRecord.results : [];
+  const candidates = Array.isArray(payload)
+    ? payload
+    : payloadRecord && Array.isArray(payloadRecord.results)
+      ? payloadRecord.results
+      : payloadRecord && Array.isArray(payloadRecord.features)
+        ? payloadRecord.features
+        : [];
   const normalized: Array<AddressResult | null> = candidates.map((value, index) => {
-    const candidate = asRecord(value);
-    if (!candidate) return null;
+    const rawCandidate = asRecord(value);
+    if (!rawCandidate) return null;
+    const featureProperties = asRecord(rawCandidate.properties);
+    const candidate = featureProperties ? {
+      ...featureProperties,
+      ...rawCandidate,
+      address: rawCandidate.address ?? featureProperties,
+    } : rawCandidate;
     const coordinates = coordinatesFromCandidate(candidate);
     if (!coordinates || !isIsraeliResult(candidate, coordinates)) return null;
     const address = asRecord(candidate.address);
-    const label = asString(candidate.label ?? candidate.displayName ?? candidate.display_name ?? candidate.name);
+    const label = asString(candidate.label ?? candidate.displayName ?? candidate.display_name)
+      ?? [candidate.name ?? candidate.street, candidate.city, candidate.country].map(asString).filter(Boolean).join(', ');
     const detail = asString(candidate.detail ?? candidate.city ?? address?.city ?? address?.town ?? address?.municipality ?? address?.county) ?? 'ישראל';
     if (!label) return null;
     const granularity = granularityFromCandidate(candidate);
