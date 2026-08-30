@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { directoryImportIsSafe, importStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
+import { directoryImportIsSafe, importStoreDirectory, loadStoreDirectory, nationwideStoreDirectory, storeDirectoryCompleteness, storesFromDirectory } from '../lib/store-directory.ts';
 import { stores } from '../lib/data.ts';
 import type { NormalizedStore } from '../lib/ingestion/types.ts';
 
@@ -35,4 +35,35 @@ test('directory merge retains priced branches and does not invent price observat
   assert.equal(merged.length, nationwideStoreDirectory.length);
   assert.equal(merged[0]?.id, stores[0]?.id);
   assert.ok(!Object.keys(merged.find((store) => store.id === 'shufersal-jerusalem-givat-shaul') ?? {}).includes('prices'));
+});
+
+test('a configured complete directory source is loaded, cached, and exposed as configured coverage', async () => {
+  const key = 'https://fixture.invalid/directory-complete.json';
+  process.env.STORE_DIRECTORY_URL = key;
+  try {
+    let calls = 0;
+    const result = await loadStoreDirectory(async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
+    });
+    const cached = await loadStoreDirectory(async () => { calls += 1; return new Response('{}', { status: 500 }); });
+    assert.equal(result.completeness.dataset, 'configured-source');
+    assert.equal(result.entries[0]?.storeId, 'live-1');
+    assert.equal(cached.entries[0]?.storeId, 'live-1');
+    assert.equal(calls, 1);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URL;
+  }
+});
+
+test('an unsafe configured directory keeps the valid fixture and explains the fallback', async () => {
+  process.env.STORE_DIRECTORY_URL = 'https://fixture.invalid/directory-invalid.json';
+  try {
+    const result = await loadStoreDirectory(async () => new Response(JSON.stringify({ records: [{ storeId: 'missing-retailer', name: 'לא תקין' }] }), { status: 200 }));
+    assert.equal(result.completeness.dataset, 'fixture');
+    assert.equal(result.entries.length, nationwideStoreDirectory.length);
+    assert.match(result.completeness.limitations.at(-1)!, /מקור הסניפים/);
+  } finally {
+    delete process.env.STORE_DIRECTORY_URL;
+  }
 });

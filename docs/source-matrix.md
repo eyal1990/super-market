@@ -49,6 +49,21 @@ publish it when row counts, identifiers, coordinates, and source timestamps
 pass the ingestion gate. This limitation is returned in both the directory and
 nearby APIs and shown in the branch-selection UI.
 
+The Ministry of Economy's open-data portal publishes the official “Israel
+Basket” branch dataset (54 Carrefour branches as of 14 June 2026). It is a
+useful auditable source for that program, but it is not a directory of every
+Israeli supermarket chain and does not include coordinates. The application
+therefore does not silently treat it as nationwide coverage. A deployment can
+adapt that dataset, or a complete permitted retailer feed, to the normalized
+JSON contract documented in `.env.example` and set `STORE_DIRECTORY_URL`.
+The server fetches that source, validates every row, caches a passing snapshot,
+and falls back to the fixture with a visible limitation when the source is
+empty, malformed, unavailable, or fails its coordinate gate.
+
+References: [official dataset](https://data.gov.il/he/datasets/moital/israel-sal),
+[official program page](https://govextra.gov.il/economy/israel-sal-26/campaign/),
+and the [public price-transparency feed](https://url.retail.publishedprices.co.il/).
+
 ## Licensing and attribution
 
 The implementation follows the behavior described by public reference projects but does not copy their code or make them runtime dependencies. Reference links and source limitations are retained in [`price-data-investigation.md`](./price-data-investigation.md). Retailer data is shown with freshness and a checkout disclaimer. Shufersal's public transparency portal is linked from the UI source attribution.

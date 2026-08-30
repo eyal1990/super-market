@@ -69,6 +69,7 @@ export interface NormalizedStore {
   retailerId: string;
   storeId: string;
   chainId?: string;
+  chainName?: string;
   name: string;
   address?: string;
   city?: string;

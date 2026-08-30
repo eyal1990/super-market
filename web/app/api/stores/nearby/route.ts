@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { formatDistance, stores } from '@/lib/data';
-import { storeDirectoryCompleteness, storesFromDirectory } from '@/lib/store-directory';
+import { loadStoreDirectory, storesFromDirectory } from '@/lib/store-directory';
 import { rateLimit } from '@/lib/api';
 
 const distanceKm = (aLat: number, aLon: number, bLat: number, bLon: number) => {
@@ -16,15 +16,16 @@ export async function GET(request: Request) {
   const radius = Number(url.searchParams.get('radius') ?? 10);
   const mode = url.searchParams.get('mode') === 'delivery' ? 'delivery' : 'physical';
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || !Number.isFinite(radius) || radius <= 0 || radius > 100) return NextResponse.json({ error: 'מיקום או רדיוס לא תקינים' }, { status: 400 });
-  const ranked = storesFromDirectory(stores)
+  const directory = await loadStoreDirectory();
+  const ranked = storesFromDirectory(stores, directory.entries)
     .filter((store) => mode !== 'delivery' || store.delivery.capability !== 'unsupported')
     .map((store) => ({ ...store, distanceKm: distanceKm(lat, lon, store.coordinates.lat, store.coordinates.lon) }))
     .sort((a, b) => a.distanceKm - b.distanceKm);
   const nearby = ranked.filter((store) => store.distanceKm <= radius);
   const fallbackUsed = nearby.length === 0;
   const selected = (fallbackUsed ? ranked.slice(0, 3) : nearby).map((store) => ({ ...store, distance: formatDistance(store.distanceKm) }));
-  return NextResponse.json({ stores: selected, radiusKm: radius, fallbackUsed, mode, directory: storeDirectoryCompleteness, limitations: [
+  return NextResponse.json({ stores: selected, radiusKm: radius, fallbackUsed, mode, directory: directory.completeness, limitations: [
     ...(mode === 'delivery' ? ['כיסוי משלוח ודמי משלוח לא אומתו בנתוני הדוגמה.'] : []),
-    ...storeDirectoryCompleteness.limitations,
+    ...directory.completeness.limitations,
   ] });
 }

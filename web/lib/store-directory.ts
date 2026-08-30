@@ -25,6 +25,22 @@ export type StoreDirectoryImportResult = {
   warnings: string[];
 };
 
+export type StoreDirectoryCompleteness = {
+  dataset: 'fixture' | 'configured-source';
+  coverageStatus: 'representative' | 'configured';
+  branchCount: number;
+  districtCount: number;
+  supportedChains: string[];
+  source: string;
+  lastVerified: string;
+  limitations: string[];
+};
+
+export type StoreDirectoryLoadResult = {
+  entries: StoreDirectoryEntry[];
+  completeness: StoreDirectoryCompleteness;
+};
+
 const israelBounds = { minLat: 29.45, maxLat: 33.35, minLon: 34.15, maxLon: 35.95 };
 
 /**
@@ -53,7 +69,7 @@ export const nationwideStoreDirectory: StoreDirectoryEntry[] = [
   { retailerId: 'victory', storeId: 'victory-modiin', chainId: 'victory', chainName: 'ויקטורי', name: 'מודיעין', address: 'דם המכבים 36', city: 'מודיעין-מכבים-רעות', district: 'מרכז', coordinates: { lat: 31.9, lon: 35.01 }, isActive: true, source: 'fixture', lastVerified: '2026-08-30', deliveryCapability: 'unsupported' },
 ];
 
-export const storeDirectoryCompleteness = {
+export const storeDirectoryCompleteness: StoreDirectoryCompleteness = {
   dataset: 'fixture' as const,
   coverageStatus: 'representative' as const,
   branchCount: nationwideStoreDirectory.length,
@@ -63,6 +79,19 @@ export const storeDirectoryCompleteness = {
   lastVerified: '2026-08-30',
   limitations: ['המאגר מייצג סניפים מכל מחוז לצורכי פיתוח ואינו רשימת סניפים חיה או מלאה. יש להחליף אותו בייצוא רשמי מאומת לפני השקה ארצית.'],
 };
+
+function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'configured-source', lastVerified: string, limitations: string[]): StoreDirectoryCompleteness {
+  return {
+    dataset: source,
+    coverageStatus: source === 'fixture' ? 'representative' : 'configured',
+    branchCount: entries.length,
+    districtCount: new Set(entries.map((entry) => entry.district).filter(Boolean)).size,
+    supportedChains: [...new Set(entries.map((entry) => entry.chainId))],
+    source,
+    lastVerified,
+    limitations,
+  };
+}
 
 function directoryIdentity(record: NormalizedStore) {
   return `${record.retailerId}:${record.storeId}`.toLocaleLowerCase('en-US');
@@ -99,9 +128,9 @@ export function directoryImportIsSafe(result: StoreDirectoryImportResult, minimu
 const colors: Store['color'][] = ['mint', 'blue', 'yellow'];
 
 /** Merge directory coverage with the priced fixture without inventing prices. */
-export function storesFromDirectory(pricedStores: Store[]): Store[] {
+export function storesFromDirectory(pricedStores: Store[], entries: readonly StoreDirectoryEntry[] = nationwideStoreDirectory): Store[] {
   const pricedById = new Map(pricedStores.map((store) => [store.id, store]));
-  return nationwideStoreDirectory.filter((entry) => entry.isActive).map((entry, index) => {
+  return entries.filter((entry) => entry.isActive).map((entry, index) => {
     const priced = pricedById.get(entry.storeId);
     if (priced) return priced;
     return {
@@ -117,4 +146,117 @@ export function storesFromDirectory(pricedStores: Store[]): Store[] {
       delivery: { capability: entry.deliveryCapability, coverageVerified: false, feesVerified: false },
     } satisfies Store;
   });
+}
+
+const directoryCache = new Map<string, { expiresAt: number; result: StoreDirectoryLoadResult }>();
+const directoryCacheTtlMs = 5 * 60 * 1000;
+const directoryFetchTimeoutMs = 10_000;
+
+function sourceMetadata(retailerId: string, source: unknown, lastVerified?: unknown) {
+  if (source && typeof source === 'object') {
+    const value = source as Record<string, unknown>;
+    if (typeof value.sourceUri === 'string' && typeof value.downloadedAt === 'string') return source as NormalizedStore['source'];
+  }
+  const verified = typeof lastVerified === 'string' ? lastVerified : new Date().toISOString();
+  return { retailerId, adapterId: 'configured-directory', sourceFileId: 'configured-directory', sourceUri: typeof source === 'string' ? source : 'configured://directory', fileName: 'directory.json', documentKind: 'stores' as const, publishedAt: verified, downloadedAt: verified, checksum: 'runtime-source' };
+}
+
+function normalizedExternalRecord(raw: unknown): NormalizedStore | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const coordinates = value.coordinates && typeof value.coordinates === 'object' ? value.coordinates as Record<string, unknown> : undefined;
+  const retailerId = typeof value.retailerId === 'string' ? value.retailerId : typeof value.chainId === 'string' ? value.chainId : null;
+  const storeId = typeof value.storeId === 'string' ? value.storeId : typeof value.id === 'string' ? value.id : null;
+  const name = typeof value.name === 'string' ? value.name : typeof value.branch === 'string' ? value.branch : null;
+  const latitude = typeof value.latitude === 'number' ? value.latitude : typeof coordinates?.lat === 'number' ? coordinates.lat : null;
+  const longitude = typeof value.longitude === 'number' ? value.longitude : typeof coordinates?.lon === 'number' ? coordinates.lon : null;
+  if (!retailerId || !storeId || !name || latitude === null || longitude === null) return null;
+  return {
+    retailerId,
+    storeId,
+    chainId: typeof value.chainId === 'string' ? value.chainId : retailerId,
+    chainName: typeof value.chainName === 'string' ? value.chainName : undefined,
+    name,
+    address: typeof value.address === 'string' ? value.address : undefined,
+    city: typeof value.city === 'string' ? value.city : undefined,
+    postalCode: typeof value.postalCode === 'string' ? value.postalCode : undefined,
+    latitude,
+    longitude,
+    isActive: value.isActive !== false,
+    source: sourceMetadata(retailerId, value.source, value.lastVerified),
+  };
+}
+
+function directoryEntryFromRecord(record: NormalizedStore): StoreDirectoryEntry {
+  const source = record.source;
+  const lastVerified = source.publishedAt ?? source.downloadedAt;
+  return {
+    retailerId: record.retailerId,
+    storeId: record.storeId,
+    chainId: record.chainId ?? record.retailerId,
+    chainName: record.chainName ?? record.chainId ?? record.retailerId,
+    name: record.name,
+    address: record.address ?? 'כתובת לא סופקה',
+    city: record.city ?? 'יישוב לא סופק',
+    district: 'לא סווג',
+    postalCode: record.postalCode,
+    coordinates: { lat: record.latitude!, lon: record.longitude! },
+    isActive: record.isActive !== false,
+    source: source.sourceUri,
+    lastVerified,
+    deliveryCapability: 'unsupported',
+  };
+}
+
+function externalRecords(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  const value = payload as Record<string, unknown>;
+  for (const key of ['stores', 'records', 'branches']) if (Array.isArray(value[key])) return value[key] as unknown[];
+  return [];
+}
+
+/**
+ * Load a complete branch snapshot from a provider-neutral JSON endpoint. The
+ * endpoint is server-side only; failures and unsafe snapshots keep the local
+ * fixture available and visibly marked as such.
+ */
+export async function loadStoreDirectory(fetchImpl: typeof fetch = fetch): Promise<StoreDirectoryLoadResult> {
+  const endpoint = process.env.STORE_DIRECTORY_URL?.trim();
+  if (!endpoint) return { entries: nationwideStoreDirectory, completeness: storeDirectoryCompleteness };
+  const cached = directoryCache.get(endpoint);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), directoryFetchTimeoutMs);
+    try {
+      const response = await fetchImpl(endpoint, { headers: { accept: 'application/json' }, signal: controller.signal });
+      if (!response.ok) throw new Error(`directory source returned ${response.status}`);
+      const payload = await response.json() as unknown;
+      const rawRecords = externalRecords(payload);
+      const normalized: NormalizedStore[] = [];
+      let invalidCount = 0;
+      rawRecords.forEach((raw) => {
+        const record = normalizedExternalRecord(raw);
+        if (record) normalized.push(record); else invalidCount += 1;
+      });
+      const imported = await importStoreDirectory((async function* () { yield* normalized; })());
+      if (!rawRecords.length || invalidCount > 0 || !directoryImportIsSafe(imported)) throw new Error('directory source failed validation');
+      const entries = imported.records.map(directoryEntryFromRecord);
+      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), []) };
+      directoryCache.set(endpoint, { expiresAt: Date.now() + directoryCacheTtlMs, result });
+      return result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    const result = {
+      entries: nationwideStoreDirectory,
+      completeness: completenessFor(nationwideStoreDirectory, 'fixture', storeDirectoryCompleteness.lastVerified, [
+        ...storeDirectoryCompleteness.limitations,
+        'מקור הסניפים שהוגדר לא זמין או נכשל בבדיקת תקינות; מוצגת תמונת fixture אחרונה.',
+      ]),
+    };
+    return result;
+  }
 }
