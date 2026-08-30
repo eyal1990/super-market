@@ -294,7 +294,7 @@ function granularityFromCandidate(candidate: Record<string, unknown>): Geocoding
   return 'unknown';
 }
 
-function normalizeProviderResults(payload: unknown, provider: string): AddressResult[] {
+export function normalizeProviderResults(payload: unknown, provider: string): AddressResult[] {
   const payloadRecord = asRecord(payload);
   const candidates = Array.isArray(payload)
     ? payload

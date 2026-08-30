@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AddressSuggestion } from '@/lib/address-directory';
-import { calculateBasket, calculateLine, formatDistance, getPrice, isPromotionActive, money, products, searchProducts, type AddressResult, type Product, type Store } from '@/lib/data';
+import { addressQueryWithoutHouseNumber, calculateBasket, calculateLine, formatDistance, getPrice, isPromotionActive, money, normalizeProviderResults, products, searchProducts, type AddressResult, type Product, type Store } from '@/lib/data';
 
 type Basket = Record<string, number>;
 const BASKET_STORAGE_KEY = 'sal-zol-basket-v2';
@@ -28,6 +28,15 @@ function parseBasket(value: string | null): Basket | null {
 
 function parseShoppingMode(value: string | null): ShoppingMode | null {
   return value === 'physical' || value === 'delivery' ? value : null;
+}
+
+async function searchPhotonInBrowser(query: string, signal: AbortSignal): Promise<AddressResult[]> {
+  const url = new URL('https://photon.komoot.io/api/');
+  url.searchParams.set('q', query);
+  url.searchParams.set('limit', '8');
+  const response = await fetch(url, { signal, headers: { accept: 'application/json' } });
+  if (!response.ok) return [];
+  return normalizeProviderResults(await response.json() as unknown, 'photon');
 }
 
 export default function Home() {
@@ -114,9 +123,16 @@ export default function Home() {
       setAddressSearchLoading(true);
       fetch(`/api/location/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
         .then(async (response) => {
-          const payload = await response.json() as { results?: AddressResult[]; error?: string };
+          const payload = await response.json() as { results?: AddressResult[]; error?: string; geocoding?: { status?: string } };
           if (!response.ok) throw new Error(payload.error || 'address search failed');
-          const results = Array.isArray(payload.results) ? payload.results : [];
+          let results = Array.isArray(payload.results) ? payload.results : [];
+          if (!results.length && payload.geocoding?.status === 'unavailable') {
+            results = await searchPhotonInBrowser(query, controller.signal);
+            if (!results.length) {
+              const fallbackQuery = addressQueryWithoutHouseNumber(query);
+              if (fallbackQuery) results = await searchPhotonInBrowser(fallbackQuery, controller.signal);
+            }
+          }
           setAddressResults(results);
           const pendingAddress = pendingDirectoryAddress.current;
           if (pendingAddress === query) {
