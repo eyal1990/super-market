@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AddressSuggestion } from '@/lib/address-directory';
-import { calculateBasket, calculateLine, catalogCompleteness, formatDistance, freshnessLabel, getPrice, isPromotionActive, money, priceTrustState, products, type AddressResult, type Product, type Store } from '@/lib/data';
-import { getCatalogBranchCoverage, type PriceContract } from '@/lib/shopping';
+import { calculateBasket, calculateLine, catalogCompleteness, formatDistance, freshnessLabel, getPrice, isPromotionActive, money, priceTrustState, products, searchProducts, type AddressResult, type Product, type Store } from '@/lib/data';
+import { getCatalogBranchCoverage, type CatalogBranchCoverage, type PriceContract } from '@/lib/shopping';
 import { LOCATION_MEMORY_STORAGE_KEY, parseRememberedLocation, serializeRememberedLocation } from '@/lib/location-state';
 import { BASKET_STORAGE_KEY, LEGACY_BASKET_STORAGE_KEY, parseBasket, parseShoppingMode, serializeBasket, SHOPPING_MODE_STORAGE_KEY, type Basket, type ShoppingMode } from '@/lib/shopping';
 import type { DeliveryHandoff } from '@/lib/shopping';
@@ -24,9 +24,132 @@ type AddressSearchResponse = {
 
 type ProductDiscoveryResponse = {
   status?: 'ready' | 'no_results';
-  results?: Array<{ id?: string; price?: PriceContract | null }>;
+  results?: ProductDiscoveryResult[];
   pagination?: { page: number; pageSize: number; total: number; hasNext: boolean; hasPrevious: boolean; nextPage: number | null; previousPage: number | null };
+  coverage?: CatalogBranchCoverage | null;
+  catalogSource?: 'configured' | 'fixture';
+  catalog?: CatalogSummary;
 };
+
+type ProductDiscoveryResult = {
+  id?: string;
+  barcode?: string;
+  name?: string;
+  brand?: string;
+  size?: string;
+  category?: string;
+  tag?: string;
+  icon?: string;
+  aliases?: string[];
+  imageUrl?: string;
+  imageAlt?: string;
+  image?: Product['image'] | null;
+  provenance?: Product['provenance'] | null;
+  prices?: Record<string, PriceContract | null>;
+  branchPrices?: Record<string, PriceContract | null>;
+  branchAvailability?: Record<string, boolean>;
+  promotions?: Product['promotions'];
+  branchPromotions?: Record<string, BranchPromotion[]>;
+  price?: PriceContract | null;
+};
+
+type BranchPromotion = {
+  id: string;
+  kind: 'public' | 'club';
+  label: string;
+  startsAt: string | null;
+  endsAt: string | null;
+  minimumQuantity: number | null;
+  promotionalPriceNis: number | null;
+};
+
+type RenderProduct = Product & { branchPromotions?: Record<string, BranchPromotion[]> };
+
+type CatalogSummary = {
+  dataset?: string;
+  productCount?: number;
+  branchCount?: number;
+  branchPriceCoverage?: number;
+  limitations?: string[];
+};
+
+function priceObservation(contract: PriceContract | null | undefined): Product['prices'][string] | null {
+  if (!contract) return null;
+  const amount = typeof contract.amount === 'number' && Number.isFinite(contract.amount) ? contract.amount : null;
+  return {
+    amount,
+    unitPrice: typeof contract.unitPrice === 'string' ? contract.unitPrice : '',
+    updatedAt: typeof contract.updatedAt === 'string' ? contract.updatedAt : '',
+    available: contract.available === true && amount !== null,
+    source: typeof contract.source === 'string' ? contract.source : '',
+  };
+}
+
+function branchPromotionIsActive(promotion: BranchPromotion, now = new Date()) {
+  const startsAt = promotion.startsAt ? new Date(promotion.startsAt).getTime() : -Infinity;
+  const endsAt = promotion.endsAt ? new Date(promotion.endsAt).getTime() : Infinity;
+  return (!promotion.startsAt || Number.isFinite(startsAt)) && (!promotion.endsAt || Number.isFinite(endsAt)) && now.getTime() >= startsAt && now.getTime() <= endsAt;
+}
+
+function branchPromotionAsProductPromotion(promotion: BranchPromotion) {
+  return {
+    id: promotion.id,
+    kind: promotion.kind,
+    label: promotion.label,
+    minimumQuantity: promotion.minimumQuantity ?? undefined,
+    offerPrice: promotion.kind === 'public' && promotion.promotionalPriceNis !== null ? promotion.promotionalPriceNis : undefined,
+    clubPrice: promotion.kind === 'club' && promotion.promotionalPriceNis !== null ? promotion.promotionalPriceNis : undefined,
+    validUntil: promotion.endsAt ?? '9999-12-31T23:59:59.999Z',
+    explanation: promotion.label,
+  } satisfies Product['promotions'][number];
+}
+
+function productForStore(product: RenderProduct, storeId: string, now = new Date()): Product {
+  const branchPromotions = product.branchPromotions?.[storeId]?.filter((promotion) => branchPromotionIsActive(promotion, now)).map(branchPromotionAsProductPromotion) ?? [];
+  if (!branchPromotions.length) return product;
+  const promotions = [...product.promotions.filter((promotion) => !branchPromotions.some((candidate) => candidate.id === promotion.id)), ...branchPromotions];
+  return { ...product, promotions };
+}
+
+function productFromApiResult(result: ProductDiscoveryResult, catalogSource: ProductDiscoveryResponse['catalogSource'], selectedStore: string | null): RenderProduct | null {
+  const id = result.id?.trim();
+  if (!id) return null;
+  const fixtureProduct = products.find((product) => product.id === id);
+  if (fixtureProduct && (catalogSource === 'fixture' || !result.name)) return fixtureProduct;
+  const name = result.name?.trim();
+  if (!name) return fixtureProduct ?? null;
+  const branchPriceContracts = result.branchPrices ?? result.prices ?? {};
+  const prices: Product['prices'] = Object.fromEntries(Object.entries(branchPriceContracts).flatMap(([storeId, contract]) => {
+    const observation = priceObservation(contract);
+    return observation ? [[storeId, observation]] : [];
+  }));
+  if (selectedStore && !Object.prototype.hasOwnProperty.call(prices, selectedStore)) {
+    const selectedPrice = priceObservation(result.price);
+    if (selectedPrice) prices[selectedStore] = selectedPrice;
+  }
+  const image = result.image ?? undefined;
+  const imageUrl = result.imageUrl?.trim() || image?.url;
+  const imageAlt = result.imageAlt?.trim() || image?.alt || `${name}, תמונת מוצר`;
+  return {
+    id,
+    barcode: result.barcode?.trim() || id,
+    name,
+    brand: result.brand?.trim() || 'מותג לא סופק',
+    size: result.size?.trim() || 'מידה לא סופקה',
+    category: result.category?.trim() || 'מוצרי מזון',
+    tag: result.tag?.trim() || 'מוצר מהקטלוג',
+    icon: result.icon || '🛒',
+    aliases: Array.from(new Set([name, result.brand, ...(result.aliases ?? [])].filter((value): value is string => Boolean(value?.trim())))),
+    imageUrl,
+    imageAlt,
+    image,
+    branchAvailability: result.branchAvailability,
+    provenance: result.provenance ?? undefined,
+    prices,
+    promotions: result.promotions ?? [],
+    branchPromotions: result.branchPromotions,
+  };
+}
 
 function ProductImage({ product, compact = false }: { product: Product; compact?: boolean }) {
   const [failed, setFailed] = useState(false);
@@ -85,7 +208,11 @@ export default function Home() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState<'relevance' | 'price' | 'unit'>('relevance');
   const [productPage, setProductPage] = useState(1);
-  const [productIds, setProductIds] = useState<string[]>([]);
+  const [visibleProducts, setVisibleProducts] = useState<RenderProduct[]>([]);
+  const [catalogProductMap, setCatalogProductMap] = useState<Record<string, RenderProduct>>(() => Object.fromEntries(products.map((product) => [product.id, product])));
+  const [catalogCoverage, setCatalogCoverage] = useState<CatalogBranchCoverage | null>(null);
+  const [catalogSource, setCatalogSource] = useState<'configured' | 'fixture'>('fixture');
+  const [catalogSummary, setCatalogSummary] = useState<CatalogSummary>(catalogCompleteness);
   const [productTotal, setProductTotal] = useState(0);
   const [productHasNext, setProductHasNext] = useState(false);
   const [productHasPrevious, setProductHasPrevious] = useState(false);
@@ -368,29 +495,39 @@ export default function Home() {
     setProductSearchLoading(true);
     setProductSearchError('');
     setProductSearchStatus('idle');
-    setProductIds([]);
+    setVisibleProducts([]);
     setProductTotal(0);
     setProductHasNext(false);
     setProductHasPrevious(false);
+    setCatalogCoverage(null);
     fetch(`/api/products/search?${params.toString()}`, { signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json() as ProductDiscoveryResponse;
         if (!response.ok) throw new Error('לא ניתן לטעון את המוצרים כרגע');
         if (requestId !== productRequestId.current) return;
-        const ids = (Array.isArray(payload.results) ? payload.results : [])
-          .map((result) => result.id)
-          .filter((id): id is string => typeof id === 'string' && products.some((product) => product.id === id));
-        setProductIds(ids);
-        setProductTotal(payload.pagination?.total ?? ids.length);
+        const results = (Array.isArray(payload.results) ? payload.results : [])
+          .map((result) => productFromApiResult(result, payload.catalogSource, selectedStore))
+          .filter((product): product is RenderProduct => Boolean(product));
+        setVisibleProducts(results);
+        setCatalogProductMap((previous) => Object.fromEntries([...Object.entries(previous), ...results.map((product) => [product.id, product])]));
+        setCatalogCoverage(payload.coverage ?? null);
+        setCatalogSource(payload.catalogSource === 'configured' ? 'configured' : 'fixture');
+        setCatalogSummary(payload.catalog ?? catalogCompleteness);
+        setProductTotal(payload.pagination?.total ?? results.length);
         setProductHasNext(payload.pagination?.hasNext === true);
         setProductHasPrevious(payload.pagination?.hasPrevious === true);
-        setProductSearchStatus(ids.length ? 'ready' : 'empty');
+        setProductSearchStatus(results.length ? 'ready' : 'empty');
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         if (requestId !== productRequestId.current) return;
-        setProductIds([]);
-        setProductTotal(0);
+        const fallbackProducts = searchProducts(query, products);
+        setVisibleProducts(fallbackProducts);
+        setCatalogProductMap((previous) => Object.fromEntries([...Object.entries(previous), ...fallbackProducts.map((product) => [product.id, product])]));
+        setCatalogCoverage(null);
+        setCatalogSource('fixture');
+        setCatalogSummary(catalogCompleteness);
+        setProductTotal(fallbackProducts.length);
         setProductHasNext(false);
         setProductHasPrevious(false);
         setProductSearchStatus('error');
@@ -403,16 +540,18 @@ export default function Home() {
   }, [categoryFilter, clientReady, productPage, productRetryNonce, query, selectedStore, sortOrder]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const categories = useMemo(() => [...new Set(products.map((product) => product.category))], []);
-  const visibleProducts = productIds.map((id) => products.find((product) => product.id === id)).filter((product): product is Product => Boolean(product));
-  const productCoverage = selectedStore ? getCatalogBranchCoverage(products, nearbyStores, new Date()).find((coverage) => coverage.storeId === selectedStore) : null;
+  const catalogProducts = useMemo(() => Object.values(catalogProductMap), [catalogProductMap]);
+  const categories = useMemo(() => [...new Set(catalogProducts.map((product) => product.category))], [catalogProducts]);
+  const productCoverage = selectedStore ? catalogCoverage ?? getCatalogBranchCoverage(catalogProducts, nearbyStores, new Date()).find((coverage) => coverage.storeId === selectedStore) : null;
   const productResultCount = productSearchStatus === 'ready' || productSearchStatus === 'empty' ? productTotal : 0;
   const selectedStoreData = selectedStore ? nearbyStores.find((store) => store.id === selectedStore) : undefined;
-  const calculation = useMemo(() => selectedStore ? calculateBasket(basket, selectedStore) : null, [basket, selectedStore]);
+  const calculationProducts = useMemo(() => selectedStore ? catalogProducts.map((product) => productForStore(product, selectedStore)) : catalogProducts, [catalogProducts, selectedStore]);
+  const calculation = useMemo(() => selectedStore ? calculateBasket(basket, selectedStore, calculationProducts) : null, [basket, calculationProducts, selectedStore]);
   const itemCount = Object.values(basket).reduce((sum, quantity) => sum + quantity, 0);
-  const basketProducts = products.filter((product) => basket[product.id]);
+  const basketProducts = catalogProducts.filter((product) => basket[product.id]);
   const alternateStore = selectedStore ? nearbyStores.find((store) => store.id !== selectedStore) : undefined;
-  const alternateCalculation = useMemo(() => alternateStore ? calculateBasket(basket, alternateStore.id) : null, [basket, alternateStore]);
+  const alternateCalculationProducts = useMemo(() => alternateStore ? catalogProducts.map((product) => productForStore(product, alternateStore.id)) : catalogProducts, [alternateStore, catalogProducts]);
+  const alternateCalculation = useMemo(() => alternateStore ? calculateBasket(basket, alternateStore.id, alternateCalculationProducts) : null, [alternateCalculationProducts, alternateStore, basket]);
   const savings = calculation && alternateCalculation ? Math.max(0, calculation.publicTotal - alternateCalculation.publicTotal) : 0;
   const locationReady = location?.status === 'resolved';
   const retryableAddressError = addressStatus === 'timeout' || addressStatus === 'rate_limited' || addressStatus === 'unavailable';
@@ -668,15 +807,15 @@ export default function Home() {
         {!locationReady && <div className={`setup-card ${location?.status === 'unresolved' ? 'setup-card-warning' : ''}`} role="status"><span className="setup-icon" aria-hidden="true">⌖</span><div><strong>{location?.status === 'unresolved' ? 'עדיין אין לנו מיקום שניתן לשייך לסניפים' : 'מתחילים כאן: איפה אתם קונים?'}</strong><p>{location?.status === 'unresolved' ? (locationError || 'נסו כתובת אחרת כדי שנוכל להציג סניפים קרובים.') : 'הזינו כתובת או אפשרו מיקום. לא נבחר סניף אוטומטית ולא נציג כתובת מדומה.'}</p></div><button className="setup-button" onClick={() => setLocationOpen(true)}>{location?.status === 'unresolved' ? 'תיקון המיקום' : 'הזנת כתובת'}</button></div>}
         <div className="search-wrap"><span className="search-icon" aria-hidden="true">⌕</span><input id="product-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חפש מוצר, מותג או ברקוד..." aria-label="חיפוש מוצר, מותג או ברקוד" /><kbd>⌘ K</kbd></div>
         {locationReady ? <><div className="section-heading"><div><h2>{storeCoverageFallback ? 'הסניפים הנתמכים הקרובים ביותר' : 'סניפים בסביבה שלך'}</h2><p>{storeCoverageFallback ? 'לא נמצאו סניפים בטווח הקרוב; בחרו מתוך הסניפים הנתמכים הבאים.' : 'מחירים שנבדקו לאחרונה בסניפים שנמצאו ליד המיקום שלך'}</p></div>{nearbyStores.length > 0 && <button className="text-button" onClick={() => setStoreOpen((open) => !open)}>{storeOpen ? 'סגירת הסניפים' : 'החלף סניף'} <span aria-hidden="true">←</span></button>}</div><div className={`store-strip ${!selectedStore || storeOpen ? 'store-strip-expanded' : ''}`} aria-label="בחירת סניף">{nearbyStores.map((store) => <button key={store.id} className={`store-card ${selectedStore === store.id ? 'active' : ''}`} onClick={() => chooseStore(store.id)} aria-pressed={selectedStore === store.id}><span className={`store-logo ${store.color}`}>{store.chain.slice(0, 1)}</span><span className="store-copy"><strong>{store.name}</strong><small>{formatDistance(store.distanceKm)} · {store.openNow === null ? 'שעות לא אומתו' : store.openNow ? 'פתוח עכשיו' : 'סגור'}</small></span>{selectedStore === store.id && <span className="check" aria-hidden="true">✓</span>}</button>)}</div>{storeCoverageFallback && <div className="store-note" role="status">המרחקים מחושבים לפי נתוני הדוגמה. הסניפים האלה אינם בהכרח קרובים לכתובת; נתוני סניפים מלאים יחליפו את ההצעה הזו.</div>}{storeDirectoryNote && <div className="store-note" role="status">{storeDirectoryNote}</div>}{!selectedStore && <div className="store-note" role="status">בחרו סניף כדי לראות מחירים ולאפשר הוספה לסל. הכתובת לבדה לא בוחרת סניף אוטומטית.</div>}{storeOpen && <div className="store-note" role="status">ההשוואה מציגה מחירים לפי סניף. החלפת סניף תעדכן את המחירים והסכומים.</div>}</> : <div className="store-placeholder"><span aria-hidden="true">⌖</span><strong>הסניפים יופיעו כאן אחרי הגדרת מיקום</strong><small>כך נמנע מהצגת סניף או מרחק שלא אומתו.</small></div>}
-        <div className="section-heading products-heading"><div><h2>מוצרים</h2><p>{productResultCount} תוצאות · מוצגים עד 24 בכל חיפוש</p></div><div className="data-actions"><details className="data-details"><summary>מקורות ומגבלות</summary><div><strong>נתוני fixture לפיתוח</strong><span>{catalogCompleteness.productCount} מוצרים · {catalogCompleteness.branchCount} סניפים · {Math.round(catalogCompleteness.branchPriceCoverage * 100)}% כיסוי מחירים</span><span>{catalogCompleteness.limitations[0]}</span></div></details><span className="fresh-dot" title="הנתונים התקבלו ממקורות השקיפות של הרשתות">● מקור נתונים</span></div></div>
+        <div className="section-heading products-heading"><div><h2>מוצרים</h2><p>{productResultCount} תוצאות · מוצגים עד 24 בכל חיפוש</p></div><div className="data-actions"><details className="data-details"><summary>מקורות ומגבלות</summary><div><strong>{catalogSource === 'configured' ? 'קטלוג מוגדר' : 'נתוני fixture לפיתוח'}</strong><span>{catalogSummary.productCount ?? productResultCount} מוצרים · {catalogSummary.branchCount ?? 0} סניפים{catalogSummary.branchPriceCoverage === undefined ? '' : ` · ${Math.round(catalogSummary.branchPriceCoverage * 100)}% כיסוי מחירים`}</span>{catalogSummary.limitations?.[0] && <span>{catalogSummary.limitations[0]}</span>}</div></details><span className="fresh-dot" title="הנתונים התקבלו ממקורות השקיפות של הרשתות">● מקור נתונים</span></div></div>
         <div className="product-filters" aria-label="סינון מוצרים"><label>קטגוריה<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">כל הקטגוריות</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label><label>מיון<select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as typeof sortOrder)}><option value="relevance">רלוונטיות</option><option value="price" disabled={!selectedStore}>מחיר בסניף</option><option value="unit" disabled={!selectedStore}>מחיר ליחידה</option></select></label></div>
-        <div className="product-list" aria-live="polite">{visibleProducts.map((product) => { const price = selectedStore ? getPrice(product, selectedStore) : null; const quantity = basket[product.id] ?? 0; const line = selectedStore ? calculateLine(product, selectedStore, quantity || 1) : null; const publicPromo = product.promotions.find((promotion) => isPromotionActive(promotion) && promotion.kind === 'public'); const clubPromo = product.promotions.find((promotion) => isPromotionActive(promotion) && promotion.kind === 'club'); const trustState = price ? priceTrustState(price) : 'unknown'; const stale = trustState === 'stale'; return <article className={`product-card ${stale ? 'product-card-stale' : ''}`} key={product.id}><ProductImage product={product} /><div className="product-info"><span className="category-label">{product.category}</span><h3>{product.name}</h3><p>{product.brand} · {product.size}</p><div className="tag-row"><span className="product-tag">{product.tag}</span>{publicPromo && <span className="promo-tag">ציבורי: {publicPromo.label}</span>}{clubPromo && <span className="club-tag">מועדון: {money(clubPromo.clubPrice!)}</span>}{trustState === 'unavailable' && <span className="unavailable-tag">לא זמין בסניף</span>}{trustState === 'stale' && <span className="stale-tag">נתון ישן</span>}{trustState === 'unknown' && price && <span className="stale-tag">אמינות לא ידועה</span>}</div></div><div className="price-column">{price ? <><strong>{price.available ? money(price.amount!) : 'לא זמין'}</strong><small>{price.unitPrice}</small><span className="updated">{freshnessLabel(price.updatedAt)} · {price.source || 'מקור לא ידוע'}</span>{line?.promotionNote && <span className="promotion-note">{line.promotionNote}</span>}</> : <><strong className="price-pending">בחרו סניף</strong><small>המחיר יוצג אחרי הבחירה</small></>}</div><div className="product-action">{quantity ? <div className="quantity" aria-label={`כמות ${product.name}`}><button onClick={() => updateBasket(product, -1)} aria-label={`הסר יחידה של ${product.name}`}>−</button><strong>{quantity}</strong><button onClick={() => updateBasket(product, 1)} aria-label={`הוסף יחידה של ${product.name}`}>+</button></div> : <button className="add-button" onClick={() => updateBasket(product, 1)} disabled={!selectedStore || !price?.available} title={!selectedStore ? 'יש לבחור מיקום וסניף' : undefined}>+ הוסף</button>}</div></article>; })}{productSearchStatus === 'empty' && <div className="empty-state"><strong>לא מצאנו מוצר כזה</strong><span>נסו לחפש לפי שם, מותג או ברקוד אחר.</span><button className="text-button" onClick={() => { setQuery(''); setCategoryFilter('all'); }}>הצגת כל המוצרים</button></div>}</div>
+        <div className="product-list" aria-live="polite">{visibleProducts.map((product) => { const storeProduct = selectedStore ? productForStore(product, selectedStore) : product; const price = selectedStore ? getPrice(storeProduct, selectedStore) : null; const quantity = basket[product.id] ?? 0; const line = selectedStore ? calculateLine(storeProduct, selectedStore, quantity || 1) : null; const branchPromotions = selectedStore ? product.branchPromotions?.[selectedStore]?.filter((promotion) => branchPromotionIsActive(promotion)) ?? [] : []; const publicPromo = storeProduct.promotions.find((promotion) => isPromotionActive(promotion) && promotion.kind === 'public'); const clubPromo = storeProduct.promotions.find((promotion) => isPromotionActive(promotion) && promotion.kind === 'club'); const publicBranchPromo = branchPromotions.find((promotion) => promotion.kind === 'public'); const clubBranchPromo = branchPromotions.find((promotion) => promotion.kind === 'club'); const trustState = price ? priceTrustState(price) : 'unknown'; const stale = trustState === 'stale'; return <article className={`product-card ${stale ? 'product-card-stale' : ''}`} key={product.id}><ProductImage product={product} /><div className="product-info"><span className="category-label">{product.category}</span><h3>{product.name}</h3><p>{product.brand} · {product.size}</p><div className="tag-row"><span className="product-tag">{product.tag}</span>{(publicBranchPromo || publicPromo) && <span className="promo-tag">ציבורי: {publicBranchPromo?.label ?? publicPromo?.label}</span>}{(clubBranchPromo || clubPromo) && <span className="club-tag">מועדון: {clubPromo?.clubPrice !== undefined ? money(clubPromo.clubPrice) : clubBranchPromo?.promotionalPriceNis !== null && clubBranchPromo?.promotionalPriceNis !== undefined ? money(clubBranchPromo.promotionalPriceNis) : clubBranchPromo?.label}</span>}{trustState === 'unavailable' && <span className="unavailable-tag">לא זמין בסניף</span>}{trustState === 'stale' && <span className="stale-tag">נתון ישן</span>}{trustState === 'unknown' && price && <span className="stale-tag">אמינות לא ידועה</span>}</div></div><div className="price-column">{price ? <><strong>{price.available ? money(price.amount!) : 'לא זמין'}</strong><small>{price.unitPrice}</small><span className="updated">{freshnessLabel(price.updatedAt)} · {price.source || 'מקור לא ידוע'}</span>{line?.promotionNote && <span className="promotion-note">{line.promotionNote}</span>}</> : <><strong className="price-pending">בחרו סניף</strong><small>המחיר יוצג אחרי הבחירה</small></>}</div><div className="product-action">{quantity ? <div className="quantity" aria-label={`כמות ${product.name}`}><button onClick={() => updateBasket(product, -1)} aria-label={`הסר יחידה של ${product.name}`}>−</button><strong>{quantity}</strong><button onClick={() => updateBasket(product, 1)} aria-label={`הוסף יחידה של ${product.name}`}>+</button></div> : <button className="add-button" onClick={() => updateBasket(product, 1)} disabled={!selectedStore || !price?.available} title={!selectedStore ? 'יש לבחור מיקום וסניף' : undefined}>+ הוסף</button>}</div></article>; })}{productSearchStatus === 'empty' && <div className="empty-state"><strong>לא מצאנו מוצר כזה</strong><span>נסו לחפש לפי שם, מותג או ברקוד אחר.</span><button className="text-button" onClick={() => { setQuery(''); setCategoryFilter('all'); }}>הצגת כל המוצרים</button></div>}</div>
       </section>
       <aside className="basket-panel" aria-labelledby="basket-title"><div className="panel-top"><div><span className="eyebrow">{shoppingMode === 'delivery' ? 'הבחירות למשלוח' : 'הבחירות שלך'}</span><h2 id="basket-title">הסל שלי <span>{itemCount}</span></h2></div><button className="clear-button" aria-label="ניקוי הסל" onClick={() => setBasket({})}>נקה</button></div>{selectedStoreData ? <div className="basket-store"><span className={`store-logo ${selectedStoreData.color}`}>{selectedStoreData.chain.slice(0, 1)}</span><div><strong>{selectedStoreData.name}</strong><small>{selectedStoreData.address} · {formatDistance(selectedStoreData.distanceKm)}</small></div><span className="open-now">{selectedStoreData.openNow === null ? 'שעות לא אומתו' : selectedStoreData.openNow ? 'פתוח' : 'סגור'}</span></div> : <div className="basket-store basket-store-pending"><span className="store-logo muted-logo" aria-hidden="true">⌖</span><div><strong>עדיין לא נבחר סניף</strong><small>{locationReady ? 'בחרו סניף כדי לראות סכומים ומחירים' : 'הזינו כתובת ואז בחרו סניף'}</small></div></div>}<div className="basket-items">{basketProducts.length ? basketProducts.map((product) => { const line = selectedStore ? calculateLine(product, selectedStore, basket[product.id]) : null; const price = selectedStore ? getPrice(product, selectedStore) : null; return <div className="basket-item" key={product.id}><ProductImage product={product} compact /><div><strong>{product.name}</strong><small>{basket[product.id]} × {price?.amount !== null && price?.amount !== undefined ? money(price.amount) : 'מחיר אחרי בחירת סניף'}</small>{line?.promotionNote && <em>{line.promotionNote}</em>}</div><b>{line ? (line.publicTotal === null ? 'לא זמין' : money(line.publicTotal)) : '—'}</b></div>; }) : <div className="empty-basket">הסל שלך ריק כרגע.<br />הוסיפו מוצרים מהרשימה אחרי בחירת סניף.</div>}</div>{calculation && calculation.unavailable.length > 0 && <div className="unavailable-note" role="alert">{calculation.unavailable.length} מוצר{calculation.unavailable.length > 1 ? 'ים' : ''} לא זמין בסניף הזה. הסכום לא כולל אותו.</div>}{calculation && alternateStore && alternateCalculation && basketProducts.length > 0 && <div className="compare-callout"><span aria-hidden="true">✦</span><div><strong>{savings > 0 ? `אפשר לחסוך ${money(savings)}` : 'הסניף הנבחר משתלם'}</strong><small>{savings > 0 ? `בסניף ${alternateStore.chain}, שנמצא ${formatDistance(alternateStore.distanceKm)} מכאן` : 'המחיר הנמוך ביותר בין הסניפים שנבדקו'}</small></div><button onClick={() => setCompareOpen(true)} aria-label="השוואת סל בין סניפים">←</button></div>}{<div className={`total-block ${calculation ? '' : 'total-block-pending'}`}>{calculation ? <><div><span>סה״כ בסניף הנבחר</span><strong>{money(calculation.publicTotal)}</strong></div><div className="club-total"><span>עם הטבות מועדון</span><strong>−{money(calculation.clubSavings)}</strong></div><div className="total-line"><span>סה״כ לתשלום</span><strong>{money(calculation.publicTotal - calculation.clubSavings)}</strong></div></> : <div><span>סה״כ</span><strong>—</strong></div>}</div>}<button className="primary-action" disabled={!selectedStore || !basketProducts.length} onClick={() => { if (selectedStore) setCompareOpen(true); }}>{shoppingMode === 'delivery' ? 'השוואת סל למשלוח' : 'השוואת הסל המלא'} <span aria-hidden="true">←</span></button>{shoppingMode === 'delivery' && <p className="mode-note">הכיסוי ודמי המשלוח לא אומתו. לפני המשך, בדקו את הרשימה והמחירים באתר הרשת.</p>}<p className="disclaimer">מחירי המדף עשויים להשתנות בחנות. המחיר בקופה הוא הקובע.</p></aside>
     </div>
     <footer className="site-footer"><span>© 2026 סל זול · נתוני מחירים ממקורות השקיפות של הרשתות</span><nav><a href="https://prices.shufersal.co.il/" rel="noreferrer">מקור נתונים</a><a href="/privacy">פרטיות</a><a href="/terms">תנאי שימוש</a></nav></footer><div className="sr-only" aria-live="polite">{liveMessage}</div>
         {locationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setLocationOpen(false); }}><section className="modal location-modal" role="dialog" aria-modal="true" aria-labelledby="location-title" aria-describedby="location-description"><button className="modal-close" onClick={() => setLocationOpen(false)} aria-label="סגירת חלון">×</button><span className="modal-icon">⌖</span><h2 id="location-title">איפה אתם קונים?</h2><p id="location-description">נמצא סניפים לידכם רק אחרי כתובת או מיקום. לא נשמור את הכתובת, ולא נבחר סניף באופן אוטומטי.</p><button className="location-detect" onClick={useBrowserLocation} disabled={loadingStores}>שימוש במיקום הנוכחי <span>⌖</span></button><div className="modal-divider"><span>או חיפוש כתובת</span></div><input ref={locationInputRef} autoFocus value={locationQuery} onChange={(event) => { setLocationQuery(event.target.value); setAddressResults([]); setAddressStatus(null); setDirectorySuggestions([]); setLocationError(''); setLocationNotice(''); }} placeholder="רחוב, מספר ועיר..." aria-label="חיפוש כתובת" /><label className="privacy-option"><input type="checkbox" checked={rememberLocation} onChange={(event) => { const next = event.target.checked; setRememberLocation(next); if (!next) clearRememberedLocation(); else if (selectedStore) persistRememberedStore(selectedStore, shoppingMode, true); }} /><span>לזכור סניף ומיקום מעוגל במכשיר זה</span></label>{directorySearchLoading && <div className="loading-state" role="status">מחפשים בכתובות ישראל…</div>}{directorySuggestions.map((suggestion) => <button className="address-result" key={suggestion.id} onClick={() => chooseDirectorySuggestion(suggestion)} disabled={loadingStores}><strong>{suggestion.label}</strong><small>{suggestion.detail}</small></button>)}{addressSearchLoading && !directorySuggestions.length && <div className="loading-state" role="status">מאתרים את הכתובת…</div>}{!directorySuggestions.length && addressResults.map((result) => <button className="address-result" key={`${result.id}-${result.label}`} onClick={() => chooseAddress(result)} disabled={loadingStores || addressSearchLoading}><strong>{result.label}</strong><small>{result.isExactAddress ? result.detail : `${result.detail} · התאמה לפי הרחוב והיישוב`}</small></button>)}{locationQuery.trim().length >= 2 && !directorySearchLoading && !addressSearchLoading && !directorySuggestions.length && !addressResults.length && !locationError && <><div className="modal-error" role="status">{addressStatus === 'empty' ? 'לא נמצאה התאמה לכתובת הזו. נסו ניסוח אחר או בדקו את הכתובת.' : 'לא נמצאה התאמה מדויקת. נסו לבחור רחוב ויישוב מתוך ההצעות.'}</div><button className="manual-address-button" onClick={continueWithManualAddress}>המשך עם הכתובת הזו בלי לבחור סניף</button></>}{loadingStores && <div className="loading-state" role="status">טוענים סניפים לפי המיקום שסיפקתם…</div>}{locationError && <><div className="modal-error" role="alert">{locationError}</div>{retryableAddressError && <button className="manual-address-button" onClick={retryAddressSearch}>ניסיון נוסף</button>}</>}{locationNotice && <div className="modal-notice" role="status">{locationNotice}</div>}<small className="privacy-hint">🔒 הכתובת והמיקום משמשים לחיפוש הנוכחי בלבד. סימון השמירה שומר רק סניף ומיקום מעוגל.</small><div className="sr-only" aria-live="assertive" aria-atomic="true">{locationError || locationNotice}</div></section></div>}
-    {compareOpen && selectedStore && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCompareOpen(false); }}><section className="modal compare-modal" role="dialog" aria-modal="true" aria-labelledby="compare-title"><button className="modal-close" onClick={() => setCompareOpen(false)} aria-label="סגירת חלון">×</button><span className="eyebrow">השוואת סל · {shoppingMode === 'delivery' ? 'משלוח' : 'קנייה פיזית'}</span><h2 id="compare-title">איפה הסל שלך משתלם יותר?</h2><p>המחירים כוללים מבצעים ציבוריים. הטבות מועדון מוצגות בנפרד.</p><div className="compare-table">{nearbyStores.map((store) => { const total = calculateBasket(basket, store.id); const selected = store.id === selectedStore; return <button className={`compare-row ${selected ? 'selected' : ''}`} key={store.id} onClick={() => { chooseStore(store.id); if (shoppingMode === 'physical') setCompareOpen(false); }}><span className={`store-logo ${store.color}`}>{store.chain.slice(0, 1)}</span><span><strong>{store.name}</strong><small>{formatDistance(store.distanceKm)} · {total.unavailable.length ? `${total.unavailable.length} חסרים` : 'הכל זמין'} · {store.delivery.capability === 'manual' ? 'העברה ידנית' : 'העברה חלקית'}</small></span><b>{money(total.publicTotal)}</b>{selected && <em>נבחר</em>}</button>; })}</div>{shoppingMode === 'delivery' && <div className="handoff-panel"><strong>המשך לרשת או העתקת הרשימה</strong><small>ההעברה אינה הזמנה, אינה כוללת כתובת או פרטי תשלום, והמחיר בקופה הוא הקובע.</small><div className="handoff-actions">{nearbyStores.map((store) => <button key={store.id} className="handoff-button" onClick={() => void requestHandoff(store.id)} disabled={handoffLoading}>{handoffLoading ? 'מכינים…' : `העבר ל${store.chain}`}</button>)}</div>{handoffError && <div className="modal-error" role="alert">{handoffError}</div>}{handoff && <div className="handoff-result"><strong>העברה מוכנה · {handoff.retailer.name}</strong><p>{handoff.items.length} מוצרים · נוצרה {freshnessLabel(handoff.generatedAt)}</p><button className="manual-address-button" onClick={copyHandoff}>העתקת רשימת מוצרים</button><ul>{handoff.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>{handoff.retailer.retailerUrl && <a href={handoff.retailer.retailerUrl} target="_blank" rel="noreferrer">פתיחת אתר הרשת</a>}</div>}</div>}<p className="modal-footnote">ההשוואה היא לפי המחירים שנקלטו לאחרונה. המחיר בקופה הוא הקובע.</p></section></div>}
+    {compareOpen && selectedStore && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCompareOpen(false); }}><section className="modal compare-modal" role="dialog" aria-modal="true" aria-labelledby="compare-title"><button className="modal-close" onClick={() => setCompareOpen(false)} aria-label="סגירת חלון">×</button><span className="eyebrow">השוואת סל · {shoppingMode === 'delivery' ? 'משלוח' : 'קנייה פיזית'}</span><h2 id="compare-title">איפה הסל שלך משתלם יותר?</h2><p>המחירים כוללים מבצעים ציבוריים. הטבות מועדון מוצגות בנפרד.</p><div className="compare-table">{nearbyStores.map((store) => { const storeProducts = store.id === selectedStore ? calculationProducts : catalogProducts.map((product) => productForStore(product, store.id)); const total = calculateBasket(basket, store.id, storeProducts); const selected = store.id === selectedStore; return <button className={`compare-row ${selected ? 'selected' : ''}`} key={store.id} onClick={() => { chooseStore(store.id); if (shoppingMode === 'physical') setCompareOpen(false); }}><span className={`store-logo ${store.color}`}>{store.chain.slice(0, 1)}</span><span><strong>{store.name}</strong><small>{formatDistance(store.distanceKm)} · {total.unavailable.length ? `${total.unavailable.length} חסרים` : 'הכל זמין'} · {store.delivery.capability === 'manual' ? 'העברה ידנית' : 'העברה חלקית'}</small></span><b>{money(total.publicTotal)}</b>{selected && <em>נבחר</em>}</button>; })}</div>{shoppingMode === 'delivery' && <div className="handoff-panel"><strong>המשך לרשת או העתקת הרשימה</strong><small>ההעברה אינה הזמנה, אינה כוללת כתובת או פרטי תשלום, והמחיר בקופה הוא הקובע.</small><div className="handoff-actions">{nearbyStores.map((store) => <button key={store.id} className="handoff-button" onClick={() => void requestHandoff(store.id)} disabled={handoffLoading}>{handoffLoading ? 'מכינים…' : `העבר ל${store.chain}`}</button>)}</div>{handoffError && <div className="modal-error" role="alert">{handoffError}</div>}{handoff && <div className="handoff-result"><strong>העברה מוכנה · {handoff.retailer.name}</strong><p>{handoff.items.length} מוצרים · נוצרה {freshnessLabel(handoff.generatedAt)}</p><button className="manual-address-button" onClick={copyHandoff}>העתקת רשימת מוצרים</button><ul>{handoff.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>{handoff.retailer.retailerUrl && <a href={handoff.retailer.retailerUrl} target="_blank" rel="noreferrer">פתיחת אתר הרשת</a>}</div>}</div>}<p className="modal-footnote">ההשוואה היא לפי המחירים שנקלטו לאחרונה. המחיר בקופה הוא הקובע.</p></section></div>}
     {(productSearchLoading || productSearchStatus === 'idle') && <div className="loading-state product-search-status" role="status" aria-live="polite" data-testid="product-search-loading">טוענים מוצרים…</div>}
     {productSearchStatus === 'error' && <div className="modal-error product-search-status" role="alert" data-testid="product-search-error">{productSearchError}<button className="text-button" onClick={() => setProductRetryNonce((nonce) => nonce + 1)}>ניסיון נוסף</button></div>}
     {productSearchStatus === 'ready' && productTotal > 24 && <nav className="product-pagination" aria-label="דפדוף בתוצאות המוצרים" data-testid="product-pagination"><button className="text-button" disabled={!productHasPrevious || productSearchLoading} onClick={() => setProductPage((page) => Math.max(1, page - 1))}>הקודם</button><span>עמוד {productPage} · {productTotal} תוצאות</span><button className="text-button" disabled={!productHasNext || productSearchLoading} onClick={() => setProductPage((page) => page + 1)}>הבא</button></nav>}

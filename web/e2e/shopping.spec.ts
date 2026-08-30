@@ -29,6 +29,30 @@ test('product discovery exposes a loading transition and an honest no-results st
   await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
 });
 
+test('configured catalog product metadata renders outside the fixture catalog', async ({ page }) => {
+  await page.route('**/api/products/search**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        results: [{
+          id: 'runtime-milk', barcode: '9990000000001', name: 'Runtime milk', brand: 'Runtime brand', size: '1 L',
+          category: 'Dairy', tag: 'Configured catalog', icon: '🥛', aliases: ['Runtime milk'], imageUrl: null, imageAlt: 'Runtime milk', image: null,
+          provenance: null, prices: {}, branchPrices: { 'shufersal-avenue': { amount: 6.25, unitPrice: '6.25 ₪ לליטר', available: true, availabilityState: 'available', updatedAt: '2026-08-30T08:00:00Z', source: 'fixture-feed', trustState: 'fresh', freshness: { state: 'fresh', checkedAt: '2026-08-30T08:00:00Z', label: 'נבדק עכשיו' } } },
+          branchAvailability: { 'shufersal-avenue': true }, promotions: [], branchPromotions: {}, price: null,
+        }],
+        pagination: { page: 1, pageSize: 24, total: 1, hasNext: false, hasPrevious: false },
+        catalogSource: 'configured', catalog: { dataset: 'configured', productCount: 1, branchCount: 1, branchPriceCoverage: 1, limitations: ['Representative configured fixture'] },
+      }),
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('[data-app-ready="true"]')).toBeVisible();
+  await expect(page.locator('.product-card h3').filter({ hasText: 'Runtime milk' })).toBeVisible();
+  await expect(page.locator('.product-card').filter({ hasText: 'Runtime milk' })).toContainText('Runtime brand');
+});
+
 test('first visit is empty, location-gated, and supports a complete physical journey', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('[data-app-ready="true"]')).toBeVisible();
