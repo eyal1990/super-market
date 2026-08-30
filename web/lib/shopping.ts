@@ -6,7 +6,7 @@ export type ShoppingMode = 'physical' | 'delivery';
 export const BASKET_STORAGE_KEY = 'sal-zol-basket-v2';
 export const LEGACY_BASKET_STORAGE_KEY = 'sal-zol-basket';
 export const SHOPPING_MODE_STORAGE_KEY = 'sal-zol-shopping-mode';
-const PERSISTED_BASKET_VERSION = 1;
+export const PERSISTED_BASKET_VERSION = 1;
 
 export function parseBasket(value: string | null): Basket | null {
   if (!value) return null;
@@ -168,6 +168,7 @@ export function validateBasketItems(items: unknown): Basket | null {
 }
 
 export function buildDeliveryHandoff(items: Basket, storeId: string, now = new Date(), catalogStores: readonly Store[] = stores): DeliveryHandoff | null {
+  if (!Number.isFinite(now.getTime())) return null;
   const store = catalogStores.find((candidate) => candidate.id === storeId);
   if (!store) return null;
   if (store.delivery.capability === 'unsupported') return null;
@@ -249,7 +250,7 @@ export function serializeBasketCalculation(items: Basket, storeId: string, now =
   return {
     lines, unavailable, publicTotal: calculation.publicTotal, clubTotal: calculation.clubTotal, clubSavings: calculation.clubSavings,
     coverage: { requestedItems: states.length, availableItems: states.length - unknownItems - unavailableItems, unavailableItems, unknownItems, status: unknownItems > 0 ? 'unknown' as const : unavailableItems > 0 ? 'partial' as const : 'complete' as const },
-    total: { amount: calculation.publicTotal, status: unknownItems > 0 || unavailableItems > 0 ? 'partial' as const : 'complete' as const, basis: 'public_branch_prices_before_checkout' as const },
+    total: { amount: calculation.publicTotal, excludedItems: unknownItems + unavailableItems, status: unknownItems > 0 || unavailableItems > 0 ? 'partial' as const : 'complete' as const, basis: 'public_branch_prices_before_checkout' as const },
   };
 }
 

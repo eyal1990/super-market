@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { catalogCompleteness, freshnessLabel, isPriceStale, priceTrustState, products, stores } from '../lib/data.ts';
-import { buildDeliveryHandoff, getCatalogBranchCoverage, parseBasket, parseShoppingMode, serializeBasket, validateBasketItems } from '../lib/shopping.ts';
+import { buildDeliveryHandoff, getCatalogBranchCoverage, parseBasket, parseShoppingMode, priceContract, serializeBasket, validateBasketItems } from '../lib/shopping.ts';
 
 test('basket persistence accepts only known positive quantities', () => {
   assert.deepEqual(parseBasket(JSON.stringify({ milk: 2, unknown: 4, cereal: 0, eggs: 100 })), { milk: 2 });
@@ -32,6 +32,18 @@ test('trust state distinguishes fresh, stale, unavailable and unknown prices', (
   assert.equal(freshnessLabel(fresh.updatedAt, now), 'נבדק לפני 2 שעות');
 });
 
+test('price contracts preserve source, checked-at, and unknown timestamp state', () => {
+  const now = new Date('2026-08-30T10:00:00+03:00');
+  const stale = priceContract({ amount: 8, unitPrice: '8 ₪ לק״ג', updatedAt: '2026-08-28T08:00:00+03:00', available: true, source: 'fixture' }, now);
+  const unavailable = priceContract({ amount: null, unitPrice: 'לא זמין', updatedAt: '2026-08-30T08:00:00+03:00', available: false, source: 'fixture' }, now);
+  const unknown = priceContract({ amount: 8, unitPrice: '8 ₪', updatedAt: 'not-a-date', available: true, source: 'fixture' }, now);
+  assert.deepEqual(stale, { amount: 8, unitPrice: '8 ₪ לק״ג', available: true, availabilityState: 'available', updatedAt: '2026-08-28T08:00:00+03:00', source: 'fixture', trustState: 'stale', freshness: { state: 'stale', checkedAt: '2026-08-28T08:00:00+03:00', label: 'נבדק לפני 2 ימים' } });
+  assert.equal(unavailable.availabilityState, 'unavailable');
+  assert.equal(unavailable.trustState, 'unavailable');
+  assert.equal(unknown.trustState, 'unknown');
+  assert.equal(unknown.freshness.state, 'unknown');
+});
+
 test('catalog completeness reports all fixture branches and preserves unavailable products', () => {
   const coverage = getCatalogBranchCoverage(products, stores, new Date('2026-08-30T10:00:00+03:00'));
   assert.equal(coverage.length, stores.length);
@@ -56,4 +68,5 @@ test('handoff validation rejects malformed and empty baskets', () => {
   assert.equal(validateBasketItems({ milk: 0 }), null);
   assert.equal(validateBasketItems({ milk: 2, cereal: 1 })?.milk, 2);
   assert.equal(buildDeliveryHandoff({ milk: 1 }, 'missing-store'), null);
+  assert.equal(buildDeliveryHandoff({ milk: 1 }, stores[0].id, new Date('not-a-date')), null);
 });

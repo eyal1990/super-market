@@ -10,6 +10,25 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('product discovery exposes a loading transition and an honest no-results state', async ({ page }) => {
+  await page.route('**/api/products/search**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('q') !== 'never-match-this') {
+      await route.continue();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'no_results', results: [], pagination: { page: 1, pageSize: 24, total: 0, hasNext: false, hasPrevious: false } }) });
+  });
+  await page.goto('/');
+  await expect(page.locator('[data-app-ready="true"]')).toBeVisible();
+  await page.getByPlaceholder('חפש מוצר, מותג או ברקוד...').fill('never-match-this');
+  await expect(page.getByTestId('product-search-loading')).toBeVisible();
+  await expect(page.getByText('לא מצאנו מוצר כזה')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('product-search-loading')).toBeHidden();
+  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
+});
+
 test('first visit is empty, location-gated, and supports a complete physical journey', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('[data-app-ready="true"]')).toBeVisible();

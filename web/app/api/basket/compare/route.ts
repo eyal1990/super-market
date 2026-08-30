@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     const items = payload.items;
     if (!items || typeof items !== 'object' || Array.isArray(items)) return NextResponse.json({ error: 'סל לא תקין' }, { status: 400 });
     if (Object.keys(items).length > 100) return NextResponse.json({ error: 'הסל מכיל יותר מדי מוצרים' }, { status: 400 });
-    const validation = validateBasketItemsDetailed(items);
+    const validation = validateBasketItemsDetailed(items, true);
     if (!validation.valid) return NextResponse.json({ error: 'invalid_basket', code: 'invalid_basket', issues: validation.issues }, { status: 400, headers: { 'cache-control': 'no-store' } });
     const safeItems = validation.basket;
     if (!safeItems) return NextResponse.json({ error: 'הסל מכיל מוצרים או כמויות לא תקינים' }, { status: 400 });

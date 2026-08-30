@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { catalogCompleteness, getPrice, searchProducts, stores } from '@/lib/data';
+import { catalogCompleteness, getPrice, products, searchProducts, stores } from '@/lib/data';
 import { rateLimit } from '@/lib/api';
 import { loadStoreDirectory, storesFromDirectory } from '@/lib/store-directory';
-import { priceContract } from '@/lib/shopping';
+import { getCatalogBranchCoverage, priceContract } from '@/lib/shopping';
 
 const noStoreHeaders = { 'cache-control': 'no-store' };
 
@@ -42,8 +42,8 @@ export async function GET(request: Request) {
   }).map(({ product }) => product);
   const results = allResults.slice((page - 1) * pageSize, page * pageSize);
   const pagination = { page, pageSize, total: allResults.length, hasNext: page * pageSize < allResults.length, hasPrevious: page > 1, nextPage: page * pageSize < allResults.length ? page + 1 : null, previousPage: page > 1 ? page - 1 : null };
-  return NextResponse.json({ status: 'ready', pagination, category: category || null, sort: sort === 'unitPrice' ? 'unit' : sort, results: results.map((product) => {
+  return NextResponse.json({ status: allResults.length ? 'ready' : 'no_results', pagination, category: category || null, sort: sort === 'unitPrice' ? 'unit' : sort, results: results.map((product) => {
     const price = requestedStoreId ? priceContract(getPrice(product, requestedStoreId)) : null;
     return { id: product.id, barcode: product.barcode, name: product.name, brand: product.brand, size: product.size, category: product.category, tag: product.tag, icon: product.icon, aliases: product.aliases, imageUrl: product.imageUrl, imageAlt: product.imageAlt, promotions: product.promotions, price, trustState: price?.trustState ?? 'unknown', availabilityState: price?.availabilityState ?? 'unknown', freshness: price?.freshness ?? { state: 'unknown', checkedAt: null, label: 'checked-at unknown' } };
-  }), page, pageSize, total: allResults.length, hasMore: page * pageSize < allResults.length, storeId: requestedStoreId, query, freshness: 'הנתונים עודכנו היום', catalog: catalogCompleteness, directory: directory.completeness }, { headers: noStoreHeaders });
+  }), page, pageSize, total: allResults.length, hasMore: page * pageSize < allResults.length, storeId: requestedStoreId, query, freshness: 'הנתונים עודכנו היום', coverage: requestedStoreId ? getCatalogBranchCoverage(products, catalogStores).find((coverage) => coverage.storeId === requestedStoreId) ?? null : null, catalog: catalogCompleteness, directory: directory.completeness }, { headers: noStoreHeaders });
 }

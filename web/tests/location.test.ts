@@ -9,6 +9,7 @@ import {
   validateAddressQuery,
 } from '../lib/data.ts';
 import { parseBasket, parseShoppingMode } from '../lib/shopping.ts';
+import { LOCATION_MEMORY_MAX_AGE_MS, parseRememberedLocation, serializeRememberedLocation } from '../lib/location-state.ts';
 
 function validationCode(value: string) {
   const result = validateAddressQuery(value);
@@ -190,4 +191,16 @@ test('persisted onboarding state rejects corrupt, unknown, and unsafe values', (
   assert.equal(parseShoppingMode('delivery'), 'delivery');
   assert.equal(parseShoppingMode('pickup'), null);
   assert.equal(parseShoppingMode('{"mode":"delivery"}'), null);
+});
+
+test('remembered location is explicit, coarse, current, and never stores the address text', () => {
+  const now = new Date('2026-08-30T10:00:00.000Z');
+  const serialized = serializeRememberedLocation({ storeId: 'shufersal-avenue', mode: 'physical', lat: 32.08647, lon: 34.78362 }, now);
+  assert.ok(serialized);
+  assert.equal(serialized.includes('אבן גבירול'), false);
+  const parsed = parseRememberedLocation(serialized, now);
+  assert.deepEqual(parsed, { version: 1, storeId: 'shufersal-avenue', mode: 'physical', lat: 32.09, lon: 34.78, savedAt: now.toISOString() });
+  assert.equal(parseRememberedLocation('{"version":2,"storeId":"shufersal-avenue"}', now), null);
+  assert.equal(parseRememberedLocation(JSON.stringify({ ...parsed, savedAt: new Date(now.getTime() - LOCATION_MEMORY_MAX_AGE_MS - 1).toISOString() }), now), null);
+  assert.equal(parseRememberedLocation(JSON.stringify({ ...parsed, lat: 51.5, lon: -0.1 }), now), null);
 });

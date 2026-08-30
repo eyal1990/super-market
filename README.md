@@ -66,6 +66,8 @@ node --experimental-strip-types --test tests/product-flow.test.ts
 
 CI runs lint, typecheck, unit/API tests, build, and deterministic Playwright browser smoke tests on every push and pull request. The browser suite covers desktop and mobile RTL first-run state, location-gated branch selection, product search and basket mutations, delivery mode, and retailer handoff warnings.
 
+The browser suite also checks the product discovery loading/no-results contract and direct API contracts for pagination, unavailable/stale coverage, partial basket totals, malformed baskets, and retailer-neutral handoff privacy. CI uploads Playwright diagnostics when a browser check fails.
+
 On Windows PowerShell systems where the local execution policy blocks `npm.ps1`, use `npm.cmd` in the repository-root commands above (for example, `npm.cmd test`).
 
 ## Active product backlog

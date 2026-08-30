@@ -5,6 +5,9 @@
 - No credentials, cookies, database URLs, or API keys are committed. Production adapters receive secrets from environment/secret storage.
 - API routes validate query lengths, coordinates, radius, basket shape, and quantity bounds. Malformed JSON returns a safe Hebrew error without internals.
 - The browser keeps the anonymous basket locally; exact address text is not persisted. Geolocation is permission-based and has a manual fallback.
+- Remembered branch restoration is an explicit opt-in and stores only a
+  short-lived branch id plus coarse (two-decimal-place) coordinates; malformed,
+  expired, out-of-Israel, or non-matching state is discarded.
 - Current price freshness, source type, missing items, club eligibility, and checkout authority are shown in the interface.
 - Privacy and terms routes explain local storage, location handling, data limitations, and public versus club pricing.
 - Administrative ingestion is not exposed as a public mutation route. The status endpoint is read-only and contains no credentials or exact user locations.

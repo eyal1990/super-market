@@ -15,6 +15,15 @@ The first release is Hebrew-first and right-to-left. It keeps one primary branch
 - Onboarding: the page shows location → shopping mode → first product progress, and the setup prompt can be dismissed and revisited without clearing the local basket.
 - Delivery: the mode is visible in the header and basket; each retailer exposes a partial/manual handoff with a validated product/quantity/barcode export and no address or payment data.
 
+## Returning location state
+
+Location and branch restoration is opt-in. The "remember this branch" control
+stores only the branch id, shopping mode, a two-decimal-place coordinate, and a
+short expiry timestamp. On return, the server nearby-branch response must
+contain the saved active branch before it is selected; otherwise the saved
+state is discarded and the user chooses again. The exact address text is never
+stored by the browser.
+
 ## Accessibility notes
 
 Semantic headings, labelled controls, pressed states, focus-visible outlines, a skip link, live announcements for basket/store changes, keyboard shortcut focus, and RTL document metadata are included. Color is paired with text for promotion and availability states. Long Hebrew names truncate inside fixed rows without changing the calculation.
