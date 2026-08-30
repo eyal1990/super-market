@@ -20,6 +20,7 @@ test('first visit is empty, location-gated, and supports a complete physical jou
   await expect(page.getByRole('button', { name: /אבן גבירול 124/ }).first()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /אבן גבירול 124/ }).first().click();
   await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: /קנייה פיזית/ }).click();
   await page.getByRole('button', { name: /שופרסל דיל/ }).first().click();
   await page.locator('.product-card').first().scrollIntoViewIfNeeded();
   const productImage = page.locator('.product-card img').first();
@@ -41,6 +42,7 @@ test('delivery mode exposes retailer handoff and does not claim an order was pla
   await expect(page.locator('[data-app-ready="true"]')).toBeVisible();
   await page.getByRole('textbox', { name: 'חיפוש כתובת' }).fill('אבן גבירול 124');
   await page.getByRole('button', { name: /אבן גבירול 124/ }).first().click();
+  await page.getByRole('button', { name: /קנייה פיזית/ }).click();
   await page.getByRole('button', { name: /שופרסל דיל/ }).first().click();
   await page.getByRole('button', { name: /קנייה במשלוח/ }).click();
   await page.getByPlaceholder('חפש מוצר, מותג או ברקוד...').fill('milk');

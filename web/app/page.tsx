@@ -97,7 +97,8 @@ export default function Home() {
   const [directorySearchNonce, setDirectorySearchNonce] = useState(0);
 
   useEffect(() => {
-    setClientReady(true);
+    const frame = window.requestAnimationFrame(() => setClientReady(true));
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -292,6 +293,10 @@ export default function Home() {
   }
 
   function chooseStore(storeId: string) {
+    if (!modeChosen) {
+      setLiveMessage('בחרו קודם דרך קנייה: פיזית או משלוח');
+      return;
+    }
     if (!locationReady || !nearbyStores.some((store) => store.id === storeId)) {
       setLiveMessage('יש להזין כתובת או לאשר מיקום לפני בחירת סניף');
       setLocationOpen(true);
