@@ -12,7 +12,7 @@ The first release is Hebrew-first and right-to-left. It keeps one primary branch
 - Basket: quantity controls are bounded to 99, survive a browser restart in local storage, and expose missing prices as unavailable rather than zero.
 - Comparison: the full basket modal lists each nearby store, total, distance, and missing-item count. Public totals and club savings are separate.
 - Data health: freshness is visible near product data, and the API exposes retailer run status, warnings, failures, and the partial-run policy.
-- Onboarding: the page shows location → shopping mode → first product progress, and the setup prompt can be dismissed and revisited without clearing the local basket.
+- Onboarding: the page shows the customer-facing location → nearby branch → products progress. Shopping mode is a required, visibly gated filter within the nearby-branch step, and the setup prompt can be dismissed and revisited without clearing the local basket.
 - Delivery: the mode is visible in the header and basket; each retailer exposes a partial/manual handoff with a validated product/quantity/barcode export and no address or payment data.
 
 ## Returning location state

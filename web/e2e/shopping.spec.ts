@@ -65,8 +65,12 @@ test('first visit is empty, location-gated, and supports a complete physical jou
   await expect(page.getByRole('button', { name: /אבן גבירול 124/ }).last()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /אבן גבירול 124/ }).last().click();
   await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeDisabled();
+  await expect(page.getByText('בחרו קודם קנייה פיזית או משלוח')).toBeVisible();
   await page.getByRole('button', { name: /קנייה פיזית/ }).click();
+  await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeEnabled();
   await page.getByRole('button', { name: /שופרסל דיל/ }).first().click();
+  await expect(page.getByLabel('התקדמות התחלה')).toContainText('3. בחירת מוצרים');
   await page.locator('.product-card').first().scrollIntoViewIfNeeded();
   const productImage = page.locator('.product-card img').first();
   await expect(productImage).toBeVisible();
