@@ -52,4 +52,7 @@ test('delivery mode exposes retailer handoff and does not claim an order was pla
   await page.getByRole('button', { name: /העבר לשופרסל/ }).click();
   await expect(page.getByText(/העברה מוכנה/)).toBeVisible();
   await expect(page.getByText(/העברה.*אינה הזמנה/)).toBeVisible();
+  await page.locator('.compare-modal .modal-close').click();
+  await page.getByRole('button', { name: /קנייה פיזית/ }).click();
+  await expect(page.getByRole('button', { name: /שופרסל דיל/ }).first()).toBeVisible();
 });
