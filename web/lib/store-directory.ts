@@ -21,10 +21,22 @@ export type StoreDirectoryEntry = {
 };
 
 export type StoreDirectoryImportResult = {
+  candidateRecords: NormalizedStore[];
   records: NormalizedStore[];
+  mode: 'full' | 'incremental';
+  published: boolean;
   duplicateCount: number;
   skippedCount: number;
   warnings: string[];
+};
+
+export type StoreDirectoryScope = {
+  id: string;
+  countryCode: string;
+  expectedBranchCount?: number;
+  expectedChains: string[];
+  sourceVersion?: string;
+  asOf?: string;
 };
 
 export type StoreDirectoryCompleteness = {
@@ -35,6 +47,7 @@ export type StoreDirectoryCompleteness = {
   supportedChains: string[];
   source: string;
   lastVerified: string;
+  scope: StoreDirectoryScope;
   limitations: string[];
 };
 
@@ -79,18 +92,20 @@ export const storeDirectoryCompleteness: StoreDirectoryCompleteness = {
   supportedChains: [...new Set(nationwideStoreDirectory.map((entry) => entry.chainId))],
   source: 'fixture',
   lastVerified: '2026-08-30',
+  scope: { id: 'development-representative-fixture', countryCode: 'IL', expectedChains: ['rami-levy', 'shufersal', 'victory'], sourceVersion: 'fixture-2026-08-30', asOf: '2026-08-30' },
   limitations: ['המאגר מייצג סניפים מכל מחוז לצורכי פיתוח ואינו רשימת סניפים חיה או מלאה. יש להחליף אותו בייצוא רשמי מאומת לפני השקה ארצית.'],
 };
 
-function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'configured-source', lastVerified: string, limitations: string[], complete = false): StoreDirectoryCompleteness {
+function completenessFor(entries: StoreDirectoryEntry[], source: 'fixture' | 'configured-source', lastVerified: string, limitations: string[], complete = false, scope: StoreDirectoryScope = source === 'fixture' ? storeDirectoryCompleteness.scope : { id: 'configured-source', countryCode: 'IL', expectedChains: [...new Set(entries.map((entry) => entry.chainId))] }): StoreDirectoryCompleteness {
   return {
     dataset: source,
-    coverageStatus: source === 'fixture' ? 'representative' : complete ? 'configured-complete' : 'configured-partial',
+    coverageStatus: source === 'fixture' ? 'representative' : complete ? 'configured-complete-for-scope' : 'configured-partial',
     branchCount: entries.length,
     districtCount: new Set(entries.map((entry) => entry.district).filter(Boolean)).size,
     supportedChains: [...new Set(entries.map((entry) => entry.chainId))],
     source,
     lastVerified,
+    scope,
     limitations,
   };
 }
@@ -105,13 +120,44 @@ function directoryRecordTime(record: NormalizedStore) {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function directoryStableTieBreak(record: NormalizedStore) {
+  return JSON.stringify({
+    retailerId: record.retailerId.trim().toLocaleLowerCase('en-US'),
+    storeId: record.storeId.trim().toLocaleLowerCase('en-US'),
+    chainId: record.chainId ?? '',
+    chainName: record.chainName ?? '',
+    name: record.name.trim(),
+    address: record.address?.trim() ?? '',
+    city: record.city?.trim() ?? '',
+    district: record.district?.trim() ?? '',
+    postalCode: record.postalCode ?? '',
+    latitude: record.latitude ?? null,
+    longitude: record.longitude ?? null,
+    isActive: record.isActive !== false,
+    openNow: record.openNow ?? null,
+    deliveryCapability: record.deliveryCapability ?? 'unsupported',
+    retailerUrl: record.retailerUrl ?? '',
+    sourceFileId: record.source.sourceFileId,
+    checksum: record.source.checksum,
+  });
+}
+
+function shouldReplaceDirectoryRecord(candidate: NormalizedStore, existing: NormalizedStore) {
+  const candidateTime = directoryRecordTime(candidate);
+  const existingTime = directoryRecordTime(existing);
+  if (candidateTime !== existingTime) return candidateTime > existingTime;
+  return directoryStableTieBreak(candidate).localeCompare(directoryStableTieBreak(existing), 'en-US') > 0;
+}
+
 function validCoordinate(latitude: number | undefined, longitude: number | undefined) {
   return latitude !== undefined && longitude !== undefined && Number.isFinite(latitude) && Number.isFinite(longitude)
     && latitude >= israelBounds.minLat && latitude <= israelBounds.maxLat && longitude >= israelBounds.minLon && longitude <= israelBounds.maxLon;
 }
 
 /** Validate and atomically prepare a full or incremental branch feed. */
-export async function importStoreDirectory(records: AsyncIterable<NormalizedStore>): Promise<StoreDirectoryImportResult> {
+export async function importStoreDirectory(records: AsyncIterable<NormalizedStore>, options: { mode?: 'full' | 'incremental'; previous?: readonly NormalizedStore[]; minimumRecords?: number; expectedRecords?: number; maxDropRatio?: number } = {}): Promise<StoreDirectoryImportResult> {
+  const mode = options.mode ?? 'full';
+  const previous = options.previous ? [...options.previous] : [];
   const byIdentity = new Map<string, NormalizedStore>();
   const warnings: string[] = [];
   let duplicateCount = 0;
@@ -125,15 +171,31 @@ export async function importStoreDirectory(records: AsyncIterable<NormalizedStor
     const key = directoryIdentity(record);
     const existing = byIdentity.get(key);
     if (existing) duplicateCount += 1;
-    if (!existing || directoryRecordTime(record) >= directoryRecordTime(existing)) {
+    if (!existing || shouldReplaceDirectoryRecord(record, existing)) {
       byIdentity.set(key, { ...record, isActive: record.isActive ?? true });
     }
   }
-  return { records: [...byIdentity.values()].sort((left, right) => directoryIdentity(left).localeCompare(directoryIdentity(right))), duplicateCount, skippedCount, warnings };
+  const candidateRecords = [...byIdentity.values()].sort((left, right) => directoryIdentity(left).localeCompare(directoryIdentity(right), 'en-US'));
+  const minimumRecords = options.minimumRecords ?? (mode === 'full' ? 1 : 0);
+  const expectedMismatch = options.expectedRecords !== undefined && candidateRecords.length !== options.expectedRecords;
+  const maxDropRatio = options.maxDropRatio ?? 0.5;
+  const dropTooLarge = mode === 'full' && previous.length > 0 && candidateRecords.length < previous.length * (1 - Math.max(0, Math.min(1, maxDropRatio)));
+  const emptyIncrementalWithoutSnapshot = mode === 'incremental' && candidateRecords.length === 0 && previous.length === 0;
+  const published = skippedCount === 0 && candidateRecords.length >= minimumRecords && !expectedMismatch && !dropTooLarge && !emptyIncrementalWithoutSnapshot;
+  if (expectedMismatch) warnings.push(`מספר רשומות הסניפים (${candidateRecords.length}) אינו תואם לצפי (${options.expectedRecords})`);
+  if (dropTooLarge) warnings.push('רענון מלא של הסניפים הושמט: ירידה חריגה במספר הרשומות');
+  if (emptyIncrementalWithoutSnapshot) warnings.push('עדכון מדורג ריק ללא snapshot קודם אינו ניתן לפרסום');
+  const merged = new Map(previous.map((record) => [directoryIdentity(record), record]));
+  if (published && mode === 'incremental') for (const record of candidateRecords) {
+    const existing = merged.get(directoryIdentity(record));
+    if (!existing || shouldReplaceDirectoryRecord(record, existing)) merged.set(directoryIdentity(record), record);
+  }
+  const publishedRecords = published ? mode === 'incremental' ? [...merged.values()] : candidateRecords : previous.length ? previous : candidateRecords;
+  return { candidateRecords, records: publishedRecords.sort((left, right) => directoryIdentity(left).localeCompare(directoryIdentity(right), 'en-US')), mode, published, duplicateCount, skippedCount, warnings };
 }
 
 export function directoryImportIsSafe(result: StoreDirectoryImportResult, minimumRecords = 1) {
-  return result.records.length >= minimumRecords && result.skippedCount === 0;
+  return result.published && result.candidateRecords.length >= minimumRecords && result.skippedCount === 0;
 }
 
 const colors: Store['color'][] = ['mint', 'blue', 'yellow'];
@@ -255,13 +317,38 @@ function externalRecords(payload: unknown): unknown[] {
   return [];
 }
 
-function sourceClaimsComplete(payload: unknown, recordCount: number) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+function configuredScope(payload: unknown, entries: readonly StoreDirectoryEntry[]): StoreDirectoryScope {
+  const root = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+  const completeness = root.completeness && typeof root.completeness === 'object' ? root.completeness as Record<string, unknown> : root;
+  const rawScope = completeness.scope && typeof completeness.scope === 'object' ? completeness.scope as Record<string, unknown> : root.scope && typeof root.scope === 'object' ? root.scope as Record<string, unknown> : {};
+  const expectedChains = Array.isArray(rawScope.expectedChains) ? rawScope.expectedChains.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).map((value) => value.trim()).sort() : [];
+  const expectedBranchCount = typeof rawScope.expectedBranchCount === 'number' && Number.isInteger(rawScope.expectedBranchCount) ? rawScope.expectedBranchCount : undefined;
+  return {
+    id: typeof rawScope.id === 'string' && rawScope.id.trim() ? rawScope.id.trim() : typeof rawScope.scopeId === 'string' && rawScope.scopeId.trim() ? rawScope.scopeId.trim() : 'configured-source',
+    countryCode: typeof rawScope.countryCode === 'string' ? rawScope.countryCode.trim().toUpperCase() : '',
+    expectedBranchCount,
+    expectedChains: expectedChains.length ? expectedChains : [...new Set(entries.map((entry) => entry.chainId))].sort(),
+    sourceVersion: typeof rawScope.sourceVersion === 'string' ? rawScope.sourceVersion : typeof rawScope.version === 'string' ? rawScope.version : undefined,
+    asOf: typeof rawScope.asOf === 'string' ? rawScope.asOf : typeof rawScope.lastVerified === 'string' ? rawScope.lastVerified : undefined,
+  };
+}
+
+function sourceClaimsComplete(payload: unknown, entries: readonly StoreDirectoryEntry[]) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { complete: false, scope: configuredScope(payload, entries) };
   const value = payload as Record<string, unknown>;
   const completeness = value.completeness && typeof value.completeness === 'object' ? value.completeness as Record<string, unknown> : value;
   const declaredComplete = value.complete === true || value.coverageStatus === 'complete' || completeness.complete === true || completeness.coverageStatus === 'complete';
-  const expectedBranchCount = completeness.expectedBranchCount ?? value.expectedBranchCount;
-  return declaredComplete && typeof expectedBranchCount === 'number' && Number.isInteger(expectedBranchCount) && expectedBranchCount === recordCount;
+  const scope = configuredScope(payload, entries);
+  const actualChains = [...new Set(entries.map((entry) => entry.chainId))].sort();
+  const expectedChains = [...scope.expectedChains].sort();
+  const complete = declaredComplete
+    && scope.countryCode === 'IL'
+    && Boolean(scope.id && scope.sourceVersion && scope.asOf && Number.isFinite(new Date(scope.asOf).getTime()))
+    && scope.expectedBranchCount === entries.length
+    && expectedChains.length > 0
+    && expectedChains.length === actualChains.length
+    && expectedChains.every((chain) => actualChains.includes(chain));
+  return { complete, scope };
 }
 
 /**
@@ -287,9 +374,9 @@ async function fetchConfiguredDirectory(endpoint: string, fetchImpl: typeof fetc
       const imported = await importStoreDirectory((async function* () { yield* normalized; })());
       if (!rawRecords.length || invalidCount > 0 || !directoryImportIsSafe(imported)) throw new Error('directory source failed validation');
       const entries = imported.records.map(directoryEntryFromRecord);
-      const complete = sourceClaimsComplete(payload, rawRecords.length);
-      const limitations = complete ? [] : ['מקור הסניפים חייב להצהיר על כיסוי מלא ולספק expectedBranchCount שתואם לכל הרשומות התקינות; אין להציג מקור חלקי כמאגר ישראלי מלא.'];
-      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, complete) };
+      const claim = sourceClaimsComplete(payload, entries);
+      const limitations = claim.complete ? [] : ['מקור הסניפים חייב לספק scope עם countryCode=IL, מזהה scope, גרסה, תאריך asOf, expectedChains ו-expectedBranchCount התואם לרשומות הייחודיות; אחרת הוא מסומן חלקי.'];
+      const result = { entries, completeness: completenessFor(entries, 'configured-source', new Date().toISOString(), limitations, claim.complete, claim.scope) };
       directoryCache.set(endpoint, { expiresAt: Date.now() + directoryCacheTtlMs, result });
       return result;
     } finally {

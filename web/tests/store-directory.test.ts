@@ -71,11 +71,12 @@ test('a configured complete directory source is loaded, cached, and exposed as c
     let calls = 0;
     const result = await loadStoreDirectory(async () => {
       calls += 1;
-      return new Response(JSON.stringify({ completeness: { complete: true, expectedBranchCount: 1 }, stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
+      return new Response(JSON.stringify({ completeness: { complete: true, scope: { id: 'fixture-live-scope', countryCode: 'IL', expectedBranchCount: 1, expectedChains: ['fixture-live'], sourceVersion: 'v1', asOf: '2026-08-30' } }, stores: [record({ retailerId: 'fixture-live', storeId: 'live-1', name: 'סניף חי' })] }), { status: 200 });
     });
     const cached = await loadStoreDirectory(async () => { calls += 1; return new Response('{}', { status: 500 }); });
     assert.equal(result.completeness.dataset, 'configured-source');
-    assert.equal(result.completeness.coverageStatus, 'configured-complete');
+    assert.equal(result.completeness.coverageStatus, 'configured-complete-for-scope');
+    assert.equal(result.completeness.scope.id, 'fixture-live-scope');
     assert.equal(result.entries[0]?.storeId, 'live-1');
     assert.equal(cached.entries[0]?.storeId, 'live-1');
     assert.equal(calls, 1);

@@ -90,7 +90,13 @@ export interface NormalizedPrice {
   barcode?: string;
   retailerItemId: string;
   productName?: string;
-  priceNis: number;
+  brand?: string;
+  size?: string;
+  category?: string;
+  aliases?: string[];
+  imageUrl?: string;
+  imageAlt?: string;
+  priceNis: number | null;
   unitPriceNis?: number;
   unitOfMeasure?: string;
   quantity?: number;

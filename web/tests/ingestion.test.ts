@@ -3,7 +3,7 @@ import test from 'node:test';
 import { runIngestion } from '../lib/ingestion/core.ts';
 import { createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
 import { parseCerberusPrices } from '../lib/ingestion/adapters/cerberus.ts';
-import { catalogImportIsSafe, importCatalogPrices } from '../lib/ingestion/catalog.ts';
+import { catalogImportIsSafe, importCatalogPrices, materializeCatalogProducts } from '../lib/ingestion/catalog.ts';
 import type { DownloadedSourceFile, RetailerSourceAdapter, SourceFile } from '../lib/ingestion/types.ts';
 
 function downloaded(source: SourceFile, xml: string): DownloadedSourceFile {
@@ -56,4 +56,46 @@ test('catalog import keeps the latest branch record, deduplicates identities, an
   assert.equal(result.duplicateCount, 1);
   assert.equal(result.skippedCount, 1);
   assert.equal(catalogImportIsSafe(result), false);
+});
+
+test('catalog full and incremental publication gates preserve a valid snapshot', async () => {
+  const source = { retailerId: 'fixture', adapterId: 'fixture', sourceFileId: 'catalog-safe', sourceUri: 'fixture://catalog-safe', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'safe' };
+  const previous = await importCatalogPrices((async function* () {
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'milk', barcode: '100', priceNis: 7, observedAt: '2026-08-30T08:00:00Z', source };
+    yield { retailerId: 'fixture', storeId: 'branch-b', retailerItemId: 'milk', barcode: '100', priceNis: 8, observedAt: '2026-08-30T08:00:00Z', source };
+  })());
+  assert.equal(previous.published, true);
+  const unsafe = await importCatalogPrices((async function* () {
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'milk', barcode: '100', priceNis: 7.5, observedAt: '2026-08-30T09:00:00Z', source };
+  })(), { previous: previous.records, mode: 'full', maxDropRatio: 0.25 });
+  assert.equal(unsafe.published, false);
+  assert.deepEqual(unsafe.records.map((record) => record.storeId), ['branch-a', 'branch-b']);
+  assert.ok(unsafe.warnings.some((warning) => warning.includes('ירידה')));
+
+  const incremental = await importCatalogPrices((async function* () {
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'milk', barcode: '100', priceNis: 7.5, observedAt: '2026-08-30T09:00:00Z', source };
+    yield { retailerId: 'fixture', storeId: 'branch-c', retailerItemId: 'milk', barcode: '100', priceNis: 6.5, isAvailable: false, observedAt: '2026-08-30T09:00:00Z', source };
+  })(), { previous: previous.records, mode: 'incremental' });
+  assert.equal(incremental.published, true);
+  assert.equal(incremental.records.length, 3);
+  assert.deepEqual(incremental.branchAvailability.find((branch) => branch.storeId === 'branch-c'), {
+    retailerId: 'fixture', storeId: 'branch-c', totalProducts: 1, availableProducts: 0, unavailableProducts: 1,
+    lastObservedAt: '2026-08-30T09:00:00.000Z', sourceFileIds: ['catalog-safe'],
+  });
+});
+
+test('catalog materialization retains product metadata, source provenance, images, and branch availability', async () => {
+  const source = { retailerId: 'fixture', adapterId: 'fixture', sourceFileId: 'catalog-metadata', sourceUri: 'fixture://catalog-metadata', fileName: 'PriceFull.xml', documentKind: 'price_full' as const, downloadedAt: '2026-08-30T08:00:00Z', checksum: 'metadata' };
+  const imported = await importCatalogPrices((async function* () {
+    yield { retailerId: 'fixture', storeId: 'branch-a', retailerItemId: 'item-1', barcode: '123', productName: 'Product One', brand: 'Brand', size: '500 g', category: 'Pantry', aliases: ['one'], imageUrl: 'https://images.example.invalid/item-1.jpg', imageAlt: 'Product One pack', priceNis: 12.5, unitPriceNis: 2.5, unitOfMeasure: '100 g', observedAt: '2026-08-30T08:00:00Z', source };
+    yield { retailerId: 'fixture', storeId: 'branch-b', retailerItemId: 'item-1', barcode: '123', productName: 'Product One', brand: 'Brand', size: '500 g', category: 'Pantry', priceNis: null, isAvailable: false, observedAt: '2026-08-30T08:00:00Z', source };
+  })());
+  const product = materializeCatalogProducts(imported.records)[0]!;
+  assert.equal(product.name, 'Product One');
+  assert.equal(product.brand, 'Brand');
+  assert.equal(product.image?.status, 'candidate');
+  assert.equal(product.provenance?.sourceFileIds[0], 'catalog-metadata');
+  assert.equal(product.prices['branch-a']?.amount, 12.5);
+  assert.equal(product.prices['branch-b']?.available, false);
+  assert.deepEqual(product.branchAvailability, { 'branch-a': true, 'branch-b': false });
 });

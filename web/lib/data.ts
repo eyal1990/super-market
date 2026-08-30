@@ -35,6 +35,21 @@ export type Promotion = {
   explanation: string;
 };
 
+export type ProductImageMetadata = {
+  url?: string;
+  alt: string;
+  status: 'verified' | 'candidate' | 'missing' | 'failed';
+  fallbackLabel: string;
+  source?: string;
+  attribution?: string;
+};
+
+export type ProductProvenance = {
+  sourceFileIds: string[];
+  sourceUris: string[];
+  lastObservedAt: string;
+};
+
 export type Product = {
   id: string;
   barcode: string;
@@ -47,6 +62,9 @@ export type Product = {
   aliases: string[];
   imageUrl?: string;
   imageAlt: string;
+  image?: ProductImageMetadata;
+  branchAvailability?: Record<string, boolean>;
+  provenance?: ProductProvenance;
   prices: Record<string, PriceObservation>;
   promotions: Promotion[];
 };
@@ -58,13 +76,33 @@ function openFoodFactsImage(barcode: string) {
   return `https://images.openfoodfacts.org/images/products/${digits.slice(0, 3)}/${digits.slice(3, 6)}/${digits.slice(6, 9)}/${digits.slice(9)}/front_he.400.jpg`;
 }
 
+export function getProductImageMetadata(product: Pick<Product, 'imageUrl' | 'imageAlt'>): ProductImageMetadata {
+  const fallbackLabel = 'תמונת מוצר אינה זמינה';
+  const alt = product.imageAlt.trim() || fallbackLabel;
+  if (!product.imageUrl) return { status: 'missing', alt, fallbackLabel };
+  try {
+    const url = new URL(product.imageUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported image protocol');
+    return {
+      url: url.toString(),
+      status: 'candidate',
+      alt,
+      fallbackLabel,
+      source: 'Open Food Facts',
+      attribution: 'Open Food Facts; verify current image licensing and attribution before production publication',
+    };
+  } catch {
+    return { status: 'missing', alt, fallbackLabel };
+  }
+}
+
 export const stores: Store[] = [
   { id: 'shufersal-avenue', retailerId: 'shufersal', chain: 'שופרסל', name: 'שופרסל דיל · אבן גבירול', distanceKm: 0.8, address: 'אבן גבירול 124, תל אביב', color: 'mint', coordinates: { lat: 32.086, lon: 34.783 }, openNow: true, delivery: { capability: 'partial', retailerUrl: 'https://www.shufersal.co.il/', coverageVerified: false, feesVerified: false } },
   { id: 'rami-levy-azrieli', retailerId: 'rami-levy', chain: 'רמי לוי', name: 'רמי לוי · מגדלי תל אביב', distanceKm: 1.6, address: 'דרך מנחם בגין 132, תל אביב', color: 'blue', coordinates: { lat: 32.074, lon: 34.79 }, openNow: true, delivery: { capability: 'manual', retailerUrl: 'https://www.rami-levy.co.il/', coverageVerified: false, feesVerified: false } },
   { id: 'victory-yh', retailerId: 'victory', chain: 'ויקטורי', name: 'ויקטורי · יהודה המכבי', distanceKm: 2.1, address: 'יהודה המכבי 42, תל אביב', color: 'yellow', coordinates: { lat: 32.094, lon: 34.793 }, openNow: true, delivery: { capability: 'manual', retailerUrl: 'https://www.victory.co.il/', coverageVerified: false, feesVerified: false } },
 ];
 
-export const products: Product[] = [
+const fixtureProducts: Product[] = [
   {
     id: 'milk', barcode: '7290004123456', name: 'חלב 3% מועשר בקרטון', brand: 'תנובה', size: '1 ליטר', category: 'מוצרי חלב', tag: 'מחיר מפוקח', icon: '🥛', aliases: ['milk', 'tanuva', 'חלב תנובה'], imageUrl: openFoodFactsImage('7290004123456'), imageAlt: 'אריזת חלב 3% מועשר בקרטון',
     prices: {
@@ -109,6 +147,8 @@ export const products: Product[] = [
     }, promotions: [],
   },
 ];
+
+export const products: Product[] = fixtureProducts.map((product) => ({ ...product, image: getProductImageMetadata(product) }));
 
 export const money = (value: number) => `${value.toFixed(2)} ₪`;
 export const formatDistance = (km: number | null) => km === null ? 'מרחק לא חושב' : km < 1 ? `${Math.round(km * 1000)} מ׳` : `${km.toFixed(1)} ק״מ`;
@@ -246,6 +286,18 @@ export type AddressGeocoder = {
   provider: string;
   search: (query: string, options?: { signal?: AbortSignal }) => Promise<AddressResult[]>;
 };
+
+export type AddressGeocoderErrorCode = 'timeout' | 'rate_limited' | 'out_of_coverage' | 'unavailable';
+
+export class AddressGeocoderError extends Error {
+  readonly code: AddressGeocoderErrorCode;
+
+  constructor(code: AddressGeocoderErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = 'AddressGeocoderError';
+    this.code = code;
+  }
+}
 
 export type AddressGeocoderConfig = {
   endpoint?: string;
@@ -415,6 +467,14 @@ export function normalizeProviderResults(payload: unknown, provider: string): Ad
   return normalized.filter((result): result is AddressResult => Boolean(result));
 }
 
+function providerCandidates(payload: unknown): unknown[] {
+  const record = asRecord(payload);
+  if (Array.isArray(payload)) return payload;
+  if (record && Array.isArray(record.results)) return record.results;
+  if (record && Array.isArray(record.features)) return record.features;
+  return [];
+}
+
 function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoint'>> & AddressGeocoderConfig): AddressGeocodingProvider {
   const fetchImpl = config.fetchImpl ?? fetch;
   const id = config.providerName?.trim() || 'configured-provider';
@@ -430,7 +490,8 @@ function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoi
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('accept-language', 'he');
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5_000);
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 5_000);
       if (options.signal) {
         if (options.signal.aborted) controller.abort();
         else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -440,8 +501,13 @@ function createHttpProvider(config: Required<Pick<AddressGeocoderConfig, 'endpoi
         if (config.userAgent?.trim()) headers.set('user-agent', config.userAgent.trim());
         if (config.apiKey) headers.set('authorization', `Bearer ${config.apiKey}`);
         const response = await fetchImpl(url, { headers, signal: controller.signal });
-        if (!response.ok) throw new Error(`Geocoder returned ${response.status}`);
+        if (response.status === 429) throw new AddressGeocoderError('rate_limited', 'Geocoder rate limit reached');
+        if (!response.ok) throw new AddressGeocoderError('unavailable', `Geocoder returned ${response.status}`);
         return response.json();
+      } catch (error) {
+        if (error instanceof AddressGeocoderError) throw error;
+        if (timedOut) throw new AddressGeocoderError('timeout', 'Geocoder request timed out');
+        throw error;
       } finally {
         clearTimeout(timeout);
       }
@@ -456,7 +522,16 @@ export function createAddressGeocoder(config: AddressGeocoderConfig = {}): Addre
     mode: 'provider',
     provider: provider.id,
     async search(query, options) {
-      return normalizeProviderResults(await provider.search(query, options), provider.id);
+      const payload = await provider.search(query, options);
+      const results = normalizeProviderResults(payload, provider.id);
+      const candidates = providerCandidates(payload).map(asRecord).filter((candidate): candidate is Record<string, unknown> => Boolean(candidate));
+      if (candidates.length > 0 && results.length === 0 && candidates.every((candidate) => {
+        const coordinates = coordinatesFromCandidate(candidate);
+        return coordinates !== null && !isIsraeliResult(candidate, coordinates);
+      })) {
+        throw new AddressGeocoderError('out_of_coverage', 'Geocoder returned results outside Israel');
+      }
+      return results;
     },
   };
 }
@@ -466,21 +541,29 @@ export type AddressSearchResolution = {
   mode: GeocodingMode;
   configuredMode: GeocodingMode;
   provider: string;
-  providerStatus: 'fixture' | 'ok' | 'unavailable';
+  providerStatus: 'fixture' | 'ok' | 'empty' | 'ambiguous' | 'timeout' | 'rate_limited' | 'out_of_coverage' | 'unavailable';
   fallbackUsed: boolean;
   matchedQuery: string;
   queryFallbackUsed: boolean;
   limitations: string[];
 };
 
+function resultStatus(results: AddressResult[]): AddressSearchResolution['providerStatus'] {
+  if (!results.length) return 'empty';
+  return results.length > 1 && !results.some((result) => result.isExactAddress) ? 'ambiguous' : 'ok';
+}
+
 export async function resolveAddressSearch(query: string, geocoder = createAddressGeocoder()): Promise<AddressSearchResolution> {
   if (geocoder.mode === 'fixture') {
-    return { results: await geocoder.search(query), mode: 'fixture', configuredMode: 'fixture', provider: geocoder.provider, providerStatus: 'fixture', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: ['מצב fixture מיועד לפיתוח ולבדיקות ואינו מכסה את כל כתובות ישראל.'] };
+    const results = await geocoder.search(query);
+    const status = resultStatus(results);
+    return { results, mode: 'fixture', configuredMode: 'fixture', provider: geocoder.provider, providerStatus: status === 'ok' ? 'fixture' : status, fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: ['מצב fixture מיועד לפיתוח ולבדיקות ואינו מכסה את כל כתובות ישראל.'] };
   }
   try {
     const results = await geocoder.search(query);
     if (results.length) {
-      return { results, mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: [] };
+      const status = resultStatus(results);
+      return { results, mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: status, fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: status === 'ambiguous' ? ['נמצאו כמה התאמות. בחרו את הכתובת המדויקת לפני המשך.'] : [] };
     }
     const fallbackQuery = addressQueryWithoutHouseNumber(query);
     if (fallbackQuery) {
@@ -491,7 +574,7 @@ export async function resolveAddressSearch(query: string, geocoder = createAddre
           mode: 'provider',
           configuredMode: 'provider',
           provider: geocoder.provider,
-          providerStatus: 'ok',
+           providerStatus: resultStatus(nearbyResults),
           fallbackUsed: false,
           matchedQuery: fallbackQuery,
           queryFallbackUsed: true,
@@ -499,9 +582,10 @@ export async function resolveAddressSearch(query: string, geocoder = createAddre
         };
       }
     }
-    return { results: [], mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'ok', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: [] };
-  } catch {
+    return { results: [], mode: 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'empty', fallbackUsed: false, matchedQuery: query, queryFallbackUsed: false, limitations: ['לא נמצאה התאמה לכתובת הזו. נסו ניסוח אחר או בדקו את הכתובת.'] };
+  } catch (error) {
+    const code = error instanceof AddressGeocoderError ? error.code : 'unavailable';
     const fallback = findAddressResults(query);
-    return { results: fallback, mode: fallback.length ? 'fixture' : 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: 'unavailable', fallbackUsed: fallback.length > 0, matchedQuery: query, queryFallbackUsed: false, limitations: ['ספק הגיאוקוד לא היה זמין. תוצאות fixture הן fallback מצומצם ואינן מכסות את כל כתובות ישראל.'] };
+    return { results: fallback, mode: fallback.length ? 'fixture' : 'provider', configuredMode: 'provider', provider: geocoder.provider, providerStatus: code, fallbackUsed: fallback.length > 0, matchedQuery: query, queryFallbackUsed: false, limitations: [code === 'timeout' ? 'החיפוש לא הסתיים בזמן.' : code === 'rate_limited' ? 'ספק הגיאוקוד ביקש להמתין. נסו שוב בעוד דקה.' : code === 'out_of_coverage' ? 'התוצאות שנמצאו אינן בתוך ישראל.' : 'ספק הגיאוקוד לא זמין כרגע. נסו שוב או השתמשו במיקום הנוכחי.'] };
   }
 }
