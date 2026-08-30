@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runIngestion } from '../lib/ingestion/core.ts';
-import { createCerberusAdapter, createConfiguredAdapterRegistry, createShufersalAdapter } from '../lib/ingestion/adapters/index.ts';
+import { createCerberusAdapter, createConfiguredAdapterRegistry, createShufersalAdapter, diagnoseShufersalCoverage } from '../lib/ingestion/adapters/index.ts';
 import { parseCerberusPrices } from '../lib/ingestion/adapters/cerberus.ts';
 import { catalogImportIsSafe, importCatalogFromAdapter, importCatalogPrices, loadConfiguredCatalog, materializeCatalogProducts } from '../lib/ingestion/catalog.ts';
 import type { DownloadedSourceFile, RetailerSourceAdapter, SourceFile } from '../lib/ingestion/types.ts';
@@ -21,13 +21,24 @@ test('Shufersal discovery recognizes current numeric branch filename patterns', 
 
 test('Shufersal discovery follows public transparency pagination and direct blob links', async () => {
   const pages = new Map([
-    ['https://prices.shufersal.co.il/?page=1', '<a href="/?page=2">next</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz">download</a>'],
-    ['https://prices.shufersal.co.il/?page=2', '<a href="/?page=1">previous</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-002-20260830-030000.gz">download</a>'],
+    ['https://prices.shufersal.co.il/?page=1', '<a href="/?page=2">next</a><a href="https://pricesprodpublic.blob.core.windows.net/stores/Stores7290027600007-000-20260830-020000.gz">stores</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-001-20260830-030000.gz">download</a><a href="https://pricesprodpublic.blob.core.windows.net/promofull/PromoFull7290027600007-001-001-20260830-030000.gz">promo</a>'],
+    ['https://prices.shufersal.co.il/?page=2', '<a href="/?page=1">previous</a><a href="https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-002-20260830-030000.gz">download</a><a href="https://pricesprodpublic.blob.core.windows.net/promofull/PromoFull7290027600007-001-002-20260830-030000.gz">promo</a>'],
   ]);
   const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', maxListingPages: 5, fetchImpl: async (input) => new Response(pages.get(String(input)) ?? '', { status: 200 }) });
-  const files = await adapter.discoverFiles({ retailerId: 'shufersal', documentKinds: ['price_full'] });
+  const allFiles = await adapter.discoverFiles({ retailerId: 'shufersal' });
+  const files = allFiles.filter((file) => file.documentKind === 'price_full');
   assert.deepEqual(files.map((file) => file.storeId), ['001', '002']);
   assert.ok(files.every((file) => file.uri.startsWith('https://pricesprodpublic.blob.core.windows.net/')));
+  const diagnostic = diagnoseShufersalCoverage(allFiles, true);
+  assert.equal(diagnostic.status, 'file-set-ready-records-unverified');
+  assert.deepEqual(diagnostic.priceFullBranchIds, ['001', '002']);
+  assert.deepEqual(diagnostic.missingPromoFullBranchIds, []);
+  assert.ok(diagnostic.limitations.some((limitation) => limitation.includes('record counts')));
+});
+
+test('Shufersal discovery fails closed when pagination exceeds its configured bound', async () => {
+  const adapter = createShufersalAdapter({ listingUrl: 'https://prices.shufersal.co.il/?page=1', maxListingPages: 1, fetchImpl: async () => new Response('<a href="/?page=2">next</a>', { status: 200 }) });
+  await assert.rejects(() => adapter.discoverFiles({ retailerId: 'shufersal' }), (error: unknown) => error instanceof Error && error.message.includes('maxListingPages'));
 });
 
 test('Cerberus public web endpoint remains observable as credential-gated', async () => {

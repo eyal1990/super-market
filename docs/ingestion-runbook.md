@@ -82,7 +82,7 @@ The Cerberus adapter represents the shared retailer feed and recognizes `Stores`
 
 ## Shufersal
 
-The Shufersal adapter targets the transparency portal and recognizes the same document families, including uppercase SAP-style XML. A portal session, pagination, category IDs, cookies, or Azure Blob redirect can change; inject `listFiles` when the current listing flow needs a session-aware client. Verify portal reachability, current selectors, gzip behavior, and XML fixtures from an allowed Israeli-hosted environment before production use.
+The Shufersal adapter targets the transparency portal and recognizes the same document families, including uppercase SAP-style XML. It follows same-origin pagination up to `maxListingPages` and captures the direct Azure Blob GZ links exposed by the portal. Use `diagnoseShufersalCoverage()` after discovery: `file-set-ready-records-unverified` is only a handoff to download/parse validation. If the pagination bound is hit, discovery fails with `DISCOVERY_INCOMPLETE` rather than returning a partial list. Public links still require documented open-data terms or written permission before a complete snapshot can be published.
 
 ## Failure handling and recovery
 

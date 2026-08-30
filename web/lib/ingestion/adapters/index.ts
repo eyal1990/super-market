@@ -1,9 +1,9 @@
 import type { AdapterDiscoveryMetadata, RetailerSourceAdapter } from '../types.ts';
 import { cerberusAdapter, cerberusDiscoveryMetadata, createCerberusAdapter, type CerberusAdapterOptions } from './cerberus.ts';
-import { createShufersalAdapter, shufersalAdapter, shufersalDiscoveryMetadata, type ShufersalAdapterOptions } from './shufersal.ts';
+import { createShufersalAdapter, diagnoseShufersalCoverage, shufersalAdapter, shufersalDiscoveryMetadata, type ShufersalAdapterOptions, type ShufersalCoverageDiagnostic } from './shufersal.ts';
 
-export { cerberusAdapter, cerberusDiscoveryMetadata, createCerberusAdapter, shufersalAdapter, shufersalDiscoveryMetadata, createShufersalAdapter };
-export type { CerberusAdapterOptions, ShufersalAdapterOptions };
+export { cerberusAdapter, cerberusDiscoveryMetadata, createCerberusAdapter, diagnoseShufersalCoverage, shufersalAdapter, shufersalDiscoveryMetadata, createShufersalAdapter };
+export type { CerberusAdapterOptions, ShufersalAdapterOptions, ShufersalCoverageDiagnostic };
 
 export const adapterDiscoveryCatalog: readonly AdapterDiscoveryMetadata[] = [cerberusDiscoveryMetadata, shufersalDiscoveryMetadata];
 

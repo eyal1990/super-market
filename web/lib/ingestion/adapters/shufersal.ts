@@ -34,6 +34,16 @@ export interface ShufersalAdapterOptions {
   download?: (file: SourceFile, signal?: AbortSignal) => Promise<DownloadedSourceFile>;
 }
 
+export type ShufersalCoverageDiagnostic = {
+  status: 'pagination-incomplete' | 'file-set-ready-records-unverified';
+  hasStoreSnapshot: boolean;
+  priceFullBranchIds: string[];
+  promoFullBranchIds: string[];
+  duplicatePriceFullBranchIds: string[];
+  missingPromoFullBranchIds: string[];
+  limitations: string[];
+};
+
 function classify(fileUri: string): SourceFile | undefined {
   let url: URL;
   try { url = new URL(fileUri); } catch { return undefined; }
@@ -75,6 +85,41 @@ function listingPageLinks(listing: string, baseUrl: string): string[] {
     .map((url) => url.toString());
 }
 
+/**
+ * Check the discovery result before a worker spends bandwidth downloading
+ * branch files. This deliberately proves only file-set readiness; record
+ * counts, permissions, and product completeness still belong to the catalog
+ * manifest gate.
+ */
+export function diagnoseShufersalCoverage(files: readonly SourceFile[], listingPagesExhausted = false): ShufersalCoverageDiagnostic {
+  const sourceFiles = files.filter((file) => file.retailerId === 'shufersal');
+  const branchFiles = (kind: DocumentKind) => sourceFiles.filter((file) => file.documentKind === kind && Boolean(file.storeId));
+  const priceFull = branchFiles('price_full');
+  const promoFull = branchFiles('promo_full');
+  const priceFullBranchIds = [...new Set(priceFull.map((file) => file.storeId!))].sort();
+  const promoFullBranchIds = [...new Set(promoFull.map((file) => file.storeId!))].sort();
+  const duplicatePriceFullBranchIds = priceFullBranchIds.filter((branchId) => priceFull.filter((file) => file.storeId === branchId).length > 1);
+  const missingPromoFullBranchIds = priceFullBranchIds.filter((branchId) => !promoFullBranchIds.includes(branchId));
+  const hasStoreSnapshot = sourceFiles.some((file) => file.documentKind === 'stores');
+  const ready = listingPagesExhausted && hasStoreSnapshot && priceFullBranchIds.length > 0 && duplicatePriceFullBranchIds.length === 0;
+  return {
+    status: ready ? 'file-set-ready-records-unverified' : 'pagination-incomplete',
+    hasStoreSnapshot,
+    priceFullBranchIds,
+    promoFullBranchIds,
+    duplicatePriceFullBranchIds,
+    missingPromoFullBranchIds,
+    limitations: [
+      ...(listingPagesExhausted ? [] : ['listing pagination was not proven exhausted']),
+      ...(!hasStoreSnapshot ? ['the all-branch store snapshot is missing'] : []),
+      ...(!priceFullBranchIds.length ? ['no branch pricefull files were discovered'] : []),
+      ...(duplicatePriceFullBranchIds.length ? ['duplicate pricefull files require deterministic publication selection'] : []),
+      ...(missingPromoFullBranchIds.length ? ['some branches have no promofull file; promotion coverage is incomplete'] : []),
+      'downloaded record counts, schema validity, source rights, and completeness manifest are still unverified',
+    ],
+  };
+}
+
 export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): RetailerSourceAdapter {
   return {
     retailerId: 'shufersal',
@@ -96,6 +141,7 @@ export function createShufersalAdapter(options: ShufersalAdapterOptions = {}): R
         for (const file of listingFiles(listing, pageUrl)) discovered.set(file.id, file);
         for (const link of listingPageLinks(listing, pageUrl)) if (!visited.has(link) && !pending.includes(link)) pending.push(link);
       }
+      if (pending.length) throw new IngestionError(`Shufersal listing exceeded maxListingPages (${maxPages})`, 'DISCOVERY_INCOMPLETE');
       const files = [...discovered.values()];
       const kinds = input.documentKinds ? new Set(input.documentKinds) : undefined;
       return files.filter((file) => !kinds || kinds.has(file.documentKind));
