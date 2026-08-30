@@ -3,10 +3,12 @@ import test from 'node:test';
 import {
   addressQueryWithoutHouseNumber,
   createAddressGeocoder,
+  AddressGeocoderError,
   normalizeProviderResults,
   resolveAddressSearch,
   validateAddressQuery,
 } from '../lib/data.ts';
+import { parseBasket, parseShoppingMode } from '../lib/shopping.ts';
 
 function validationCode(value: string) {
   const result = validateAddressQuery(value);
@@ -159,4 +161,31 @@ test('provider failure uses only matching fixtures and declares the fallback', a
   assert.equal(unknown.fallbackUsed, false);
   assert.equal(unknown.results.length, 0);
   assert.equal(unknown.mode, 'provider');
+});
+
+test('address resolution exposes empty, ambiguous, out-of-coverage, timeout, and rate-limit states', async () => {
+  const result = (id: string, lat: number, lon: number, type = 'house') => ({ id, display_name: id, address: { city: 'תל אביב-יפו', country_code: 'il' }, lat, lon, type });
+  const empty = await resolveAddressSearch('כתובת שלא קיימת', createAddressGeocoder({ provider: { id: 'empty', async search() { return []; } } }));
+  assert.equal(empty.providerStatus, 'empty');
+
+  const ambiguous = await resolveAddressSearch('הרצל 10', createAddressGeocoder({ provider: { id: 'ambiguous', async search() { return [result('a', 32.08, 34.78, 'road'), result('b', 32.09, 34.79, 'road')]; } } }));
+  assert.equal(ambiguous.providerStatus, 'ambiguous');
+  assert.equal(ambiguous.results.length, 2);
+
+  const outside = await resolveAddressSearch('London', createAddressGeocoder({ provider: { id: 'outside', async search() { return [{ id: 'gb', display_name: 'London', address: { country_code: 'gb' }, lat: 51.5, lon: -0.1 }]; } } }));
+  assert.equal(outside.providerStatus, 'out_of_coverage');
+
+  const timeout = await resolveAddressSearch('כתובת', createAddressGeocoder({ provider: { id: 'timeout', async search() { throw new AddressGeocoderError('timeout'); } } }));
+  assert.equal(timeout.providerStatus, 'timeout');
+  const limited = await resolveAddressSearch('כתובת', createAddressGeocoder({ provider: { id: 'limited', async search() { throw new AddressGeocoderError('rate_limited'); } } }));
+  assert.equal(limited.providerStatus, 'rate_limited');
+});
+
+test('persisted onboarding state rejects corrupt, unknown, and unsafe values', () => {
+  assert.equal(parseBasket('{"cereal":2,"unknown":9,"eggs":0}'), null);
+  assert.equal(parseBasket('{broken'), null);
+  assert.equal(parseBasket('[]'), null);
+  assert.equal(parseShoppingMode('delivery'), 'delivery');
+  assert.equal(parseShoppingMode('pickup'), null);
+  assert.equal(parseShoppingMode('{"mode":"delivery"}'), null);
 });
